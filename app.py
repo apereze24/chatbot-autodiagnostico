@@ -9,13 +9,12 @@ Cómo ejecutar (desde la carpeta del proyecto):
     .venv\\Scripts\\streamlit run app.py
 """
 
-import os
-
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
 import ai_analyst
+import llm
 from data_source import cargar
 
 load_dotenv()  # lee ANTHROPIC_API_KEY desde un archivo .env si existe
@@ -43,13 +42,14 @@ st.sidebar.markdown(
 """
 )
 st.sidebar.markdown("---")
-if os.environ.get("ANTHROPIC_API_KEY"):
-    st.sidebar.success("🧠 IA de Claude: ACTIVA")
+if llm.disponible():
+    st.sidebar.success(f"🧠 IA: ACTIVA\n\n{llm.nombre_legible()}")
 else:
     st.sidebar.error(
-        "🧠 IA de Claude: SIN CONECTAR.\n\n"
-        "Este chatbot necesita la clave para entender preguntas libres. "
-        "Configúrala en `.env` (local) o en *Secrets* (Streamlit Cloud)."
+        "🧠 IA: SIN CONECTAR.\n\n"
+        "Este chatbot necesita una clave (GEMINI_API_KEY o ANTHROPIC_API_KEY) "
+        "para entender preguntas libres. Configúrala en `.env` (local) o en "
+        "*Secrets* (Streamlit Cloud)."
     )
 
 

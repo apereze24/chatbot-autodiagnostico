@@ -14,12 +14,13 @@ El número SIEMPRE sale de los datos (paso 2); la IA solo traduce y explica.
 Requiere una clave de API de Claude (ANTHROPIC_API_KEY).
 """
 
-import os
 import re
 
 import duckdb
 import pandas as pd
+from pydantic import BaseModel, Field
 
+import llm
 from data_source import DESCRIPCION_COLUMNAS
 
 TABLA = "autodiagnosticos"
@@ -33,8 +34,11 @@ PROHIBIDAS = re.compile(
 )
 
 
-def _modelo() -> str:
-    return os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")
+class ConsultaSQL(BaseModel):
+    sql: str = Field(description="Consulta SQL (SELECT) para DuckDB que responde la pregunta. Vacío si no se puede.")
+    tipo_grafico: str = Field(description="Tipo de gráfico sugerido: 'barras', 'lineas' o 'ninguno'.")
+    columna_x: str = Field(description="Nombre de la columna para el eje X del gráfico, o cadena vacía si no aplica.")
+    se_puede_responder: bool = Field(description="True si la pregunta se puede responder con esta tabla; False si no.")
 
 
 def esquema_texto() -> str:
@@ -71,37 +75,22 @@ def validar_sql(sql: str) -> str | None:
 
 
 def generar_sql(pregunta: str) -> dict:
-    """Paso 1: Claude traduce la pregunta a SQL. Devuelve dict con sql y metadatos."""
-    import anthropic
-    from pydantic import BaseModel, Field
-
-    class ConsultaSQL(BaseModel):
-        sql: str = Field(description="Consulta SQL (SELECT) para DuckDB que responde la pregunta.")
-        tipo_grafico: str = Field(description="Tipo de gráfico sugerido: 'barras', 'lineas' o 'ninguno'.")
-        columna_x: str | None = Field(description="Nombre de la columna a usar como eje X del gráfico, o null.")
-        se_puede_responder: bool = Field(description="True si la pregunta se puede responder con esta tabla; False si no.")
-
-    client = anthropic.Anthropic()
-    resp = client.messages.parse(
-        model=_modelo(),
-        max_tokens=1000,
-        system=(
-            "Eres un analista de datos que responde preguntas sobre un proceso "
-            "llamado 'autodiagnóstico' (diagnóstico del módem de wifi de clientes). "
-            "Traduce la pregunta del usuario a UNA consulta SQL de solo lectura "
-            "(SELECT) sobre la tabla descrita abajo. No inventes columnas.\n\n"
-            f"{esquema_texto()}\n\n"
-            "Si la pregunta NO se puede responder con esta tabla, pon "
-            "se_puede_responder=false y deja sql vacío."
-        ),
-        messages=[{"role": "user", "content": pregunta}],
-        output_format=ConsultaSQL,
+    """Paso 1: la IA traduce la pregunta a SQL. Devuelve dict con sql y metadatos."""
+    system = (
+        "Eres un analista de datos que responde preguntas sobre un proceso "
+        "llamado 'autodiagnóstico' (diagnóstico del módem de wifi de clientes). "
+        "Traduce la pregunta del usuario a UNA consulta SQL de solo lectura "
+        "(SELECT) sobre la tabla descrita abajo. No inventes columnas.\n\n"
+        f"{esquema_texto()}\n\n"
+        "Si la pregunta NO se puede responder con esta tabla, pon "
+        "se_puede_responder=false y deja sql vacío."
     )
-    r = resp.parsed_output
+    r = llm.generar_json(system, pregunta, ConsultaSQL)
+    columna_x = (r.columna_x or "").strip() if r else ""
     return {
         "sql": (r.sql or "").strip() if r else "",
         "tipo_grafico": (r.tipo_grafico or "ninguno") if r else "ninguno",
-        "columna_x": r.columna_x if r else None,
+        "columna_x": columna_x or None,
         "se_puede_responder": bool(r.se_puede_responder) if r else False,
     }
 
@@ -118,28 +107,18 @@ def ejecutar_sql(df: pd.DataFrame, sql: str) -> pd.DataFrame:
 
 
 def redactar_respuesta(pregunta: str, resultado: pd.DataFrame) -> str:
-    """Paso 3: Claude redacta una respuesta en español a partir del resultado."""
-    import anthropic
-
+    """Paso 3: la IA redacta una respuesta en español a partir del resultado."""
     muestra = resultado.head(50).to_csv(index=False)
-    client = anthropic.Anthropic()
-    resp = client.messages.create(
-        model=_modelo(),
-        max_tokens=600,
-        system=(
-            "Eres un analista que explica resultados de datos a una persona no "
-            "técnica, en español, de forma breve y clara. Te doy la pregunta y el "
-            "resultado (en CSV) de una consulta ya ejecutada sobre datos reales. "
-            "Responde la pregunta directamente citando las cifras del resultado. "
-            "No inventes datos que no estén en el resultado. Si el resultado está "
-            "vacío, dilo. Máximo 4 frases; la tabla y el gráfico se muestran aparte."
-        ),
-        messages=[{
-            "role": "user",
-            "content": f"Pregunta: {pregunta}\n\nResultado de la consulta (CSV):\n{muestra}",
-        }],
+    system = (
+        "Eres un analista que explica resultados de datos a una persona no "
+        "técnica, en español, de forma breve y clara. Te doy la pregunta y el "
+        "resultado (en CSV) de una consulta ya ejecutada sobre datos reales. "
+        "Responde la pregunta directamente citando las cifras del resultado. "
+        "No inventes datos que no estén en el resultado. Si el resultado está "
+        "vacío, dilo. Máximo 4 frases; la tabla y el gráfico se muestran aparte."
     )
-    return "".join(b.text for b in resp.content if b.type == "text").strip()
+    user = f"Pregunta: {pregunta}\n\nResultado de la consulta (CSV):\n{muestra}"
+    return llm.generar_texto(system, user, max_tokens=600)
 
 
 def responder(pregunta: str, df: pd.DataFrame) -> dict:
@@ -150,10 +129,11 @@ def responder(pregunta: str, df: pd.DataFrame) -> dict:
     salida = {"texto": "", "tabla": None, "sql": "", "tipo_grafico": "ninguno",
               "columna_x": None, "error": None}
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not llm.disponible():
         salida["error"] = (
-            "La IA no está conectada. Falta configurar la clave ANTHROPIC_API_KEY "
-            "(en local: archivo .env; en Streamlit Cloud: sección Secrets)."
+            "La IA no está conectada. Falta configurar una clave de API "
+            "(GEMINI_API_KEY o ANTHROPIC_API_KEY) en el archivo .env (local) o en "
+            "la sección Secrets (Streamlit Cloud)."
         )
         return salida
 
