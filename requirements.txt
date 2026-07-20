@@ -2,3 +2,5 @@ streamlit>=1.59
 pandas>=2.2
 anthropic>=0.116
 python-dotenv>=1.0
+duckdb>=1.5
+openpyxl>=3.1
