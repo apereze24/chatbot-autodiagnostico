@@ -196,6 +196,28 @@ archivo **`Tablas_Odoo`** (pendiente de agregar). Campos confirmados con datos r
 - [ ] Fase 3: afinar las 10 mediciones con datos reales.
 - [ ] Fase 4: sumar Mixpanel (bot y portal). Fase 5: publicar para la empresa.
 
+### Modo IA de preguntas libres (2026-07-20)
+- Objetivo del usuario: chatbot que entienda preguntas LIBRES sobre una fuente de
+  datos, no una lista predeterminada. Se agregó dataset de ejemplo
+  `autodiagnosticos.xlsx` (5.000 filas, mayo–jun 2026; canales Sysbrazo/Portal
+  web/Botmaker; resultados Completado ok/Escalado/Fallido; áreas Customer/
+  Operaciones/NOC; estados Abierto/En Gestión/Solucionado; 995 con ticket).
+- Arquitectura (text-to-SQL): `data_source.py` carga y limpia el Excel;
+  `ai_analyst.py` = (1) Claude traduce la pregunta a SQL DuckDB con
+  `messages.parse` (structured output Pydantic), (2) se valida que sea solo lectura
+  y se ejecuta en DuckDB con `enable_external_access=false`, (3) Claude redacta la
+  respuesta en español desde el resultado. `app.py` reescrito a chat IA-first; el
+  historial guarda resultados para NO re-llamar la IA en cada rerun.
+- Requiere `ANTHROPIC_API_KEY` (local: `.env`; Streamlit Cloud: Secrets).
+- Publicado en GitHub `apereze24/chatbot-autodiagnostico` (repo público) +
+  Streamlit Cloud. Verificado: validador de SQL bloquea DROP/DELETE/read_csv;
+  ejecutor OK; app arranca sin errores (health 200). No se probó la llamada real
+  a Claude por falta de clave en el entorno de desarrollo.
+- **Ambigüedad de datos pendiente:** la columna "Tiempo que tardó" está guardada
+  como HH:MM:SS y al interpretarla literalmente da duraciones de hasta ~10h
+  (promedios: Completado ok ~299 min, Escalado ~486 min). El usuario la describió
+  como "minutos y segundos" → puede que la intención real sea MM:SS. Confirmar.
+
 ### Detalle técnico Fase 1
 - La IA de Claude es OPCIONAL: sin `ANTHROPIC_API_KEY` funciona con enrutador por
   palabras clave; con la clave, entiende preguntas libres (modelo por defecto
