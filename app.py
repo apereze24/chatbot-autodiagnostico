@@ -44,6 +44,20 @@ st.sidebar.markdown(
 st.sidebar.markdown("---")
 if llm.disponible():
     st.sidebar.success(f"🧠 IA: ACTIVA\n\n{llm.nombre_legible()}")
+    with st.sidebar.expander("🔧 Ver modelos disponibles de mi clave"):
+        st.caption(
+            "Útil para elegir el modelo. Si quieres forzar uno (ej. Pro), agrégalo "
+            "en Secrets como `GEMINI_MODEL = \"nombre-del-modelo\"`."
+        )
+        if st.button("Listar modelos"):
+            try:
+                modelos = llm.listar_modelos()
+                if modelos:
+                    st.write(modelos)
+                else:
+                    st.info("No se obtuvieron modelos (¿es proveedor Gemini?).")
+            except Exception as e:
+                st.error(f"No pude listar modelos: {e}")
 else:
     st.sidebar.error(
         "🧠 IA: SIN CONECTAR.\n\n"
