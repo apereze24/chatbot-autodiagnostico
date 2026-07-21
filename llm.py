@@ -37,13 +37,17 @@ def disponible() -> bool:
 def nombre_legible() -> str:
     p = proveedor()
     if p == "gemini":
-        return f"Google Gemini ({os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')})"
+        modelo = os.environ.get("GEMINI_MODEL") or _GEMINI_MODELO_CACHE or "automático"
+        return f"Google Gemini ({modelo})"
     if p == "claude":
         return f"Claude ({os.environ.get('CLAUDE_MODEL', 'claude-opus-4-8')})"
     return "sin conectar"
 
 
 # --- Gemini ------------------------------------------------------------------
+_GEMINI_MODELO_CACHE: str | None = None
+
+
 def _gemini_client():
     from google import genai
 
@@ -51,9 +55,43 @@ def _gemini_client():
     return genai.Client(api_key=api_key)
 
 
+def _elegir_modelo_gemini(client) -> str:
+    """
+    Decide qué modelo de Gemini usar:
+      1. Si GEMINI_MODEL está fijado a mano, se respeta.
+      2. Si no, se listan los modelos disponibles en la cuenta y se elige uno
+         que sirva para generar texto (preferimos un 'flash': rápido y económico).
+    El resultado se guarda en caché para no listar en cada pregunta.
+    """
+    global _GEMINI_MODELO_CACHE
+    fijado = os.environ.get("GEMINI_MODEL", "").strip()
+    if fijado:
+        return fijado
+    if _GEMINI_MODELO_CACHE:
+        return _GEMINI_MODELO_CACHE
+
+    candidatos = []
+    for m in client.models.list():
+        acciones = getattr(m, "supported_actions", None) or []
+        if "generateContent" not in acciones:
+            continue
+        nombre = m.name.replace("models/", "")
+        # Descartamos variantes que no sirven para chat de texto.
+        if any(x in nombre for x in ("embedding", "aqa", "imagen", "veo", "tts", "image")):
+            continue
+        candidatos.append(nombre)
+
+    # Preferimos 'flash' (rápido/barato); dentro de eso, el nombre más "nuevo".
+    flash = sorted([c for c in candidatos if "flash" in c], reverse=True)
+    otros = sorted(candidatos, reverse=True)
+    elegido = (flash or otros or ["gemini-flash-latest"])[0]
+    _GEMINI_MODELO_CACHE = elegido
+    return elegido
+
+
 def _gemini_json(system: str, user: str, schema: type[BaseModel]) -> BaseModel:
     client = _gemini_client()
-    modelo = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    modelo = _elegir_modelo_gemini(client)
     resp = client.models.generate_content(
         model=modelo,
         contents=user,
@@ -73,7 +111,7 @@ def _gemini_json(system: str, user: str, schema: type[BaseModel]) -> BaseModel:
 
 def _gemini_texto(system: str, user: str, max_tokens: int) -> str:
     client = _gemini_client()
-    modelo = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    modelo = _elegir_modelo_gemini(client)
     resp = client.models.generate_content(
         model=modelo,
         contents=user,
