@@ -21,7 +21,6 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 import llm
-from data_source import DESCRIPCION_COLUMNAS
 
 TABLA = "autodiagnosticos"
 LIMITE_FILAS = 2000  # tope de filas que puede devolver una consulta
@@ -41,24 +40,35 @@ class ConsultaSQL(BaseModel):
     se_puede_responder: bool = Field(description="True si la pregunta se puede responder con esta tabla; False si no.")
 
 
-def esquema_texto() -> str:
-    """Descripción de la tabla para que la IA sepa qué columnas consultar."""
-    cols = "\n".join(f"  - {c}: {d}" for c, d in DESCRIPCION_COLUMNAS.items())
+def esquema_texto(df: pd.DataFrame) -> str:
+    """Describe la tabla REAL (columnas, tipos y valores) para que la IA sepa consultar."""
+    lineas = []
+    for c in df.columns:
+        dt = str(df[c].dtype)
+        info = f"  - \"{c}\" ({dt})"
+        try:
+            distintos = df[c].nunique(dropna=True)
+        except TypeError:
+            distintos = None
+        if "datetime" in dt:
+            try:
+                info += f" — rango: {df[c].min()} a {df[c].max()}"
+            except Exception:
+                pass
+        elif df[c].dtype == object or (distintos is not None and distintos <= 25):
+            vals = [str(v) for v in df[c].dropna().unique()[:20]]
+            if vals:
+                info += " — valores: " + ", ".join(vals)
+        lineas.append(info)
+    columnas = "\n".join(lineas)
     return (
         f"Tabla: {TABLA} (una fila = un autodiagnóstico). Motor: DuckDB (dialecto SQL).\n"
-        f"Columnas:\n{cols}\n\n"
-        "Notas importantes:\n"
-        "- Los datos cubren mayo y junio de 2026.\n"
-        "- Usa los valores EXACTOS (con tildes) al filtrar texto: "
-        "canal ∈ {'Sysbrazo','Portal web','Botmaker'}; "
-        "resultado ∈ {'Completado ok','Escalado','Fallido'}; "
-        "genero_ticket ∈ {'Sí','No'}; "
-        "estado_ticket ∈ {'Abierto','En Gestión','Solucionado'}; "
-        "area_responsable ∈ {'Customer','Operaciones','NOC'}.\n"
-        "- Para tiempos de resolución de tickets usa 'resol_horas' (solo tiene "
-        "valor cuando hubo ticket).\n"
-        "- Para percentiles usa QUANTILE_CONT (ej. QUANTILE_CONT(resol_horas, 0.9)).\n"
-        "- Devuelve columnas con nombres legibles (usa alias en español)."
+        f"Columnas reales:\n{columnas}\n\n"
+        "Notas:\n"
+        "- Usa los valores EXACTOS mostrados arriba (respeta tildes y mayúsculas) al filtrar texto.\n"
+        "- Los nombres de columna pueden tener espacios/tildes: enciérralos en comillas dobles.\n"
+        "- Para percentiles usa QUANTILE_CONT (ej. QUANTILE_CONT(columna, 0.9)).\n"
+        "- Devuelve columnas de salida con nombres legibles (alias en español)."
     )
 
 
@@ -74,14 +84,14 @@ def validar_sql(sql: str) -> str | None:
     return None
 
 
-def generar_sql(pregunta: str) -> dict:
+def generar_sql(pregunta: str, df: pd.DataFrame) -> dict:
     """Paso 1: la IA traduce la pregunta a SQL. Devuelve dict con sql y metadatos."""
     system = (
         "Eres un analista de datos que responde preguntas sobre un proceso "
         "llamado 'autodiagnóstico' (diagnóstico del módem de wifi de clientes). "
         "Traduce la pregunta del usuario a UNA consulta SQL de solo lectura "
         "(SELECT) sobre la tabla descrita abajo. No inventes columnas.\n\n"
-        f"{esquema_texto()}\n\n"
+        f"{esquema_texto(df)}\n\n"
         "Si la pregunta NO se puede responder con esta tabla, pon "
         "se_puede_responder=false y deja sql vacío."
     )
@@ -138,7 +148,7 @@ def responder(pregunta: str, df: pd.DataFrame) -> dict:
         return salida
 
     try:
-        plan = generar_sql(pregunta)
+        plan = generar_sql(pregunta, df)
     except Exception as e:
         salida["error"] = f"No pude interpretar la pregunta con la IA: {e}"
         return salida
