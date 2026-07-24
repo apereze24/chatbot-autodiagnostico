@@ -214,6 +214,18 @@ def responder(pregunta: str, df: pd.DataFrame) -> dict:
 
     salida["tabla"] = tabla
 
+    if tabla.empty:
+        salida["texto"] = (
+            "La consulta corrió bien, pero **no encontró filas que cumplan la "
+            "condición**. Posibles razones:\n"
+            "- Hay **filtros activos** en la barra izquierda que dejan 0 registros "
+            "(revisa Estado/Canal/Ciudad/Fechas).\n"
+            "- En el periodo cargado hay **muy pocos tickets ya resueltos** (los "
+            "recientes siguen abiertos), así que no hay datos que promediar aún.\n\n"
+            "Tip: amplía el rango de fechas o quita filtros, y vuelve a preguntar."
+        )
+        return salida
+
     try:
         salida["texto"] = redactar_respuesta(pregunta, tabla)
     except Exception as e:
