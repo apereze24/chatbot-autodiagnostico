@@ -40,12 +40,48 @@ class ConsultaSQL(BaseModel):
     se_puede_responder: bool = Field(description="True si la pregunta se puede responder con esta tabla; False si no.")
 
 
+# Descripciones de columnas conocidas (para que la IA no confunda campos parecidos).
+# Solo se agregan si la columna existe en los datos.
+PISTAS_COLUMNAS = {
+    "source": "canal/origen del autodiagnóstico (portal, whatsapp, sysbrazo).",
+    "status": "resultado del PROCESO de autodiagnóstico: 'finished'=completado, "
+              "'failed'=falló, 'canceled'=escaló a ticket, 'running'=en curso. "
+              "NO es el estado del ticket.",
+    "duration_seconds": "cuánto duró el proceso, en segundos.",
+    "duracion_min": "cuánto duró el proceso, en minutos.",
+    "failure_reason": "causa técnica por la que falló el autodiagnóstico.",
+    "failed_step": "paso del flujo donde falló.",
+    "odoo_ticket_id": "id del ticket (si el proceso escaló).",
+    "ticket_ref": "referencia/número del ticket.",
+    "ticket_name": "nombre del ticket.",
+    "ticket_stage": "ESTADO del ticket: 'New'=abierto, 'In Progress'=en gestión, "
+                    "'Solved'=resuelto. Úsalo para saber si un ticket está resuelto.",
+    "ticket_team": "equipo/área que atiende el ticket (ej. NOC, Instalaciones y "
+                   "Mantenimiento, Customer Experience (CX), Planta externa).",
+    "ticket_type": "tipo/categoría del ticket.",
+    "ticket_opening_reason": "motivo de apertura del ticket.",
+    "ticket_close_reason": "motivo de cierre del ticket.",
+    "ticket_create_date": "fecha/hora de apertura del ticket.",
+    "ticket_close_date": "fecha/hora de cierre del ticket.",
+    "ticket_resolucion_horas": "horas que tardó en resolverse el ticket "
+                               "(cierre - apertura). Úsalo para 'qué tan rápido "
+                               "resuelven'. Solo tiene valor si el ticket ya cerró.",
+    "nombre_ciudad": "ciudad del cliente.",
+    "started_at": "fecha/hora de inicio del autodiagnóstico.",
+    "finished_at": "fecha/hora de fin del autodiagnóstico.",
+    "client_id": "id del cliente.",
+    "client_name": "nombre del cliente.",
+}
+
+
 def esquema_texto(df: pd.DataFrame) -> str:
     """Describe la tabla REAL (columnas, tipos y valores) para que la IA sepa consultar."""
     lineas = []
     for c in df.columns:
         dt = str(df[c].dtype)
         info = f"  - \"{c}\" ({dt})"
+        if c in PISTAS_COLUMNAS:
+            info += f" — {PISTAS_COLUMNAS[c]}"
         try:
             distintos = df[c].nunique(dropna=True)
         except TypeError:
