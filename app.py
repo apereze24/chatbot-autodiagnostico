@@ -116,7 +116,9 @@ def aplicar_filtros(df: pd.DataFrame) -> pd.DataFrame:
         d = d[d[col_ciudad].astype(str).isin(sel_ciudad)]
     if col_fecha and fecha_desde and fecha_hasta:
         f = pd.to_datetime(d[col_fecha], errors="coerce").dt.date
-        d = d[(f >= fecha_desde) & (f <= fecha_hasta)]
+        en_rango = (f >= fecha_desde) & (f <= fecha_hasta)
+        # Mantener filas sin fecha válida (no descartarlas en silencio).
+        d = d[en_rango | f.isna()]
     return d
 
 
