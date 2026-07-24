@@ -38,6 +38,19 @@ def _headers(key: str) -> dict:
     return {"Authorization": f"Key {key}"}
 
 
+def _normalizar(df: pd.DataFrame) -> pd.DataFrame:
+    """Agrega columnas numéricas útiles (guardadas por si el chatbot pregunta cálculos)."""
+    if df.empty:
+        return df
+    if "duration_seconds" in df.columns:
+        df["duracion_min"] = (pd.to_numeric(df["duration_seconds"], errors="coerce") / 60).round(2)
+    if "ticket_create_date" in df.columns and "ticket_close_date" in df.columns:
+        creado = pd.to_datetime(df["ticket_create_date"], errors="coerce")
+        cerrado = pd.to_datetime(df["ticket_close_date"], errors="coerce")
+        df["ticket_resolucion_horas"] = ((cerrado - creado).dt.total_seconds() / 3600).round(2)
+    return df
+
+
 def _a_dataframe(payload: dict) -> pd.DataFrame:
     data = payload["query_result"]["data"]
     columnas = [c["name"] for c in data["columns"]]
@@ -45,7 +58,7 @@ def _a_dataframe(payload: dict) -> pd.DataFrame:
     if not df.empty:
         orden = [c for c in columnas if c in df.columns]
         df = df[orden]
-    return df
+    return _normalizar(df)
 
 
 def obtener_datos(refrescar: bool = False, timeout_seg: int = 120) -> pd.DataFrame:
