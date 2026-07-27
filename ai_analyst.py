@@ -120,7 +120,7 @@ def validar_sql(sql: str) -> str | None:
     return None
 
 
-def generar_sql(pregunta: str, df: pd.DataFrame) -> dict:
+def generar_sql(pregunta: str, df: pd.DataFrame, historial=None) -> dict:
     """Paso 1: la IA traduce la pregunta a SQL. Devuelve dict con sql y metadatos."""
     system = (
         "Eres un analista de datos que responde preguntas sobre un proceso "
@@ -128,10 +128,13 @@ def generar_sql(pregunta: str, df: pd.DataFrame) -> dict:
         "Traduce la pregunta del usuario a UNA consulta SQL de solo lectura "
         "(SELECT) sobre la tabla descrita abajo. No inventes columnas.\n\n"
         f"{esquema_texto(df)}\n\n"
+        "Mantienes una conversación: si la pregunta es un seguimiento (ej. "
+        "'¿y por ciudad?', 'desglósalo por mes', 'y de esos, cuántos fallaron'), "
+        "úsala junto con los turnos anteriores para entender a qué se refiere.\n"
         "Si la pregunta NO se puede responder con esta tabla, pon "
         "se_puede_responder=false y deja sql vacío."
     )
-    r = llm.generar_json(system, pregunta, ConsultaSQL)
+    r = llm.generar_json(system, pregunta, ConsultaSQL, historial=historial)
     columna_x = (r.columna_x or "").strip() if r else ""
     return {
         "sql": (r.sql or "").strip() if r else "",
@@ -152,7 +155,7 @@ def ejecutar_sql(df: pd.DataFrame, sql: str) -> pd.DataFrame:
     return resultado
 
 
-def redactar_respuesta(pregunta: str, resultado: pd.DataFrame) -> str:
+def redactar_respuesta(pregunta: str, resultado: pd.DataFrame, historial=None) -> str:
     """Paso 3: la IA redacta una respuesta en español a partir del resultado."""
     muestra = resultado.head(50).to_csv(index=False)
     system = (
@@ -160,31 +163,52 @@ def redactar_respuesta(pregunta: str, resultado: pd.DataFrame) -> str:
         "técnica, en español, de forma breve y clara. Te doy la pregunta y el "
         "resultado (en CSV) de una consulta ya ejecutada sobre datos reales. "
         "Responde la pregunta directamente citando las cifras del resultado. "
+        "Mantienes una conversación: puedes referirte a lo hablado antes si aporta. "
         "No inventes datos que no estén en el resultado. Si el resultado está "
         "vacío, dilo. Máximo 4 frases; la tabla y el gráfico se muestran aparte."
     )
     user = f"Pregunta: {pregunta}\n\nResultado de la consulta (CSV):\n{muestra}"
-    return llm.generar_texto(system, user, max_tokens=600)
+    return llm.generar_texto(system, user, max_tokens=600, historial=historial)
 
 
-def responder(pregunta: str, df: pd.DataFrame) -> dict:
+def _pares(historial, campo: str, maximo: int = 6):
+    """Convierte el historial del chat en turnos (rol, texto) para dar memoria a la IA.
+    'campo' = qué usar como respuesta del asistente: 'sql' o 'texto'."""
+    msgs = []
+    ultimo_user = None
+    for t in historial or []:
+        if t.get("rol") == "user":
+            ultimo_user = t.get("texto")
+        elif t.get("rol") == "assistant" and ultimo_user is not None:
+            val = (t.get("resultado") or {}).get(campo) or ""
+            if val:
+                msgs.append(("user", ultimo_user))
+                msgs.append(("model", str(val)))
+            ultimo_user = None
+    return msgs[-(maximo * 2):]
+
+
+def responder(pregunta: str, df: pd.DataFrame, historial=None) -> dict:
     """
     Punto de entrada. Devuelve un dict:
       {texto, tabla (DataFrame|None), sql, tipo_grafico, columna_x, error}
+    'historial' = st.session_state.historial (para memoria de conversación).
     """
     salida = {"texto": "", "tabla": None, "sql": "", "tipo_grafico": "ninguno",
               "columna_x": None, "error": None}
 
     if not llm.disponible():
         salida["error"] = (
-            "La IA no está conectada. Falta configurar una clave de API "
-            "(GEMINI_API_KEY o ANTHROPIC_API_KEY) en el archivo .env (local) o en "
-            "la sección Secrets (Streamlit Cloud)."
+            "La IA no está conectada. Falta configurar la clave GEMINI_API_KEY "
+            "en el archivo .env (local) o en la sección Secrets (Streamlit Cloud)."
         )
         return salida
 
+    hist_sql = _pares(historial, "sql")
+    hist_txt = _pares(historial, "texto")
+
     try:
-        plan = generar_sql(pregunta, df)
+        plan = generar_sql(pregunta, df, historial=hist_sql)
     except Exception as e:
         salida["error"] = f"No pude interpretar la pregunta con la IA: {e}"
         return salida
@@ -227,7 +251,7 @@ def responder(pregunta: str, df: pd.DataFrame) -> dict:
         return salida
 
     try:
-        salida["texto"] = redactar_respuesta(pregunta, tabla)
+        salida["texto"] = redactar_respuesta(pregunta, tabla, historial=hist_txt)
     except Exception as e:
         # Si falla la redacción, al menos mostramos la tabla.
         salida["texto"] = f"(No pude redactar el resumen, pero aquí está el resultado.) [{e}]"

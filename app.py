@@ -100,9 +100,12 @@ st.sidebar.markdown("---")
 if llm.disponible():
     st.sidebar.success(f"🧠 IA: ACTIVA\n\n{llm.nombre_legible()}")
 else:
-    st.sidebar.error(
-        "🧠 IA: SIN CONECTAR. Falta GEMINI_API_KEY o ANTHROPIC_API_KEY."
-    )
+    st.sidebar.error("🧠 IA: SIN CONECTAR. Falta la clave GEMINI_API_KEY.")
+
+if st.sidebar.button("🧹 Limpiar conversación", use_container_width=True):
+    st.session_state.historial = []
+    st.rerun()
+
 st.sidebar.caption(f"Fuente de datos: {st.session_state.get('fuente', '—')}")
 
 
@@ -180,11 +183,12 @@ for turno in st.session_state.historial:
 
 pregunta = st.chat_input("Escribe tu pregunta sobre los autodiagnósticos…")
 if pregunta:
+    historial_previo = list(st.session_state.historial)  # memoria de turnos anteriores
     with st.chat_message("user"):
         st.markdown(pregunta)
     st.session_state.historial.append({"rol": "user", "texto": pregunta})
     with st.chat_message("assistant"):
         with st.spinner("Consultando los datos…"):
-            res = ai_analyst.responder(pregunta, df_filtrado)
+            res = ai_analyst.responder(pregunta, df_filtrado, historial=historial_previo)
         render_resultado(res)
     st.session_state.historial.append({"rol": "assistant", "resultado": res})
