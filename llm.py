@@ -18,6 +18,7 @@ import os
 from pydantic import BaseModel
 
 _GEMINI_MODELO_CACHE: str | None = None
+_MODELO_FORZADO: str | None = None  # modelo elegido a mano desde la app
 
 
 def _api_key() -> str | None:
@@ -28,10 +29,20 @@ def disponible() -> bool:
     return bool(_api_key())
 
 
+def fijar_modelo(nombre: str | None):
+    """Fija el modelo a usar (elegido desde la app). None = volver a automático."""
+    global _MODELO_FORZADO
+    _MODELO_FORZADO = (nombre or "").strip() or None
+
+
+def _modelo_fijado() -> str:
+    return _MODELO_FORZADO or os.environ.get("GEMINI_MODEL", "").strip()
+
+
 def nombre_legible() -> str:
     if not disponible():
         return "sin conectar"
-    modelo = os.environ.get("GEMINI_MODEL") or _GEMINI_MODELO_CACHE or "automático"
+    modelo = _modelo_fijado() or _GEMINI_MODELO_CACHE or "automático"
     return f"Google Gemini ({modelo})"
 
 
@@ -81,8 +92,8 @@ def _puntaje_modelo(nombre: str) -> int:
 
 
 def _candidatos_gemini(client) -> list[str]:
-    """Lista ordenada de modelos a intentar. Si GEMINI_MODEL está fijado, solo ese."""
-    fijado = os.environ.get("GEMINI_MODEL", "").strip()
+    """Lista ordenada de modelos a intentar. Si hay un modelo fijado, solo ese."""
+    fijado = _modelo_fijado()
     if fijado:
         return [fijado]
     candidatos = []
