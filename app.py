@@ -100,28 +100,16 @@ st.sidebar.markdown("---")
 
 
 @st.cache_data(show_spinner=False)
-def _modelos_disponibles() -> list[str]:
+def _modelo_en_uso() -> str | None:
     try:
-        return llm.listar_modelos()
+        return llm.modelo_preferido()
     except Exception:
-        return []
+        return None
 
 
 if llm.disponible():
-    modelos = _modelos_disponibles()
-    if modelos:
-        # Por defecto, preferir un modelo Pro reciente.
-        pref = next((m for m in modelos if "pro" in m.lower() and "3" in m), None)
-        pref = pref or next((m for m in modelos if "pro" in m.lower()), modelos[0])
-        idx = modelos.index(pref)
-        elegido = st.sidebar.selectbox("🧠 Modelo de IA (Gemini)", modelos, index=idx)
-        llm.fijar_modelo(elegido)
-    else:
-        manual = st.sidebar.text_input(
-            "🧠 Modelo de IA (escribe el nombre exacto)", value="gemini-3.1-pro"
-        )
-        llm.fijar_modelo(manual)
-    st.sidebar.success(f"IA: ACTIVA\n\n{llm.nombre_legible()}")
+    modelo = _modelo_en_uso() or "el más reciente disponible"
+    st.sidebar.success(f"🧠 IA: ACTIVA\n\nGoogle Gemini ({modelo})")
 else:
     st.sidebar.error("🧠 IA: SIN CONECTAR. Falta la clave GEMINI_API_KEY.")
 

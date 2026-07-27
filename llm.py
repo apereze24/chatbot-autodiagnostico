@@ -46,6 +46,21 @@ def nombre_legible() -> str:
     return f"Google Gemini ({modelo})"
 
 
+def modelo_preferido() -> str | None:
+    """El modelo que se usará: el más reciente/Pro disponible en la cuenta."""
+    if not disponible():
+        return None
+    if _modelo_fijado():
+        return _modelo_fijado()
+    if _GEMINI_MODELO_CACHE:
+        return _GEMINI_MODELO_CACHE
+    try:
+        candidatos = _candidatos_gemini(_gemini_client())
+        return candidatos[0] if candidatos else None
+    except Exception:
+        return None
+
+
 def _gemini_client():
     from google import genai
     return genai.Client(api_key=_api_key())
