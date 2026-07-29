@@ -87,7 +87,7 @@ if not df_full.empty:
         opciones = sorted(df_full[col_ciudad].dropna().astype(str).unique())
         sel_ciudad = st.sidebar.multiselect("Ciudad", opciones)
     if col_fecha:
-        fechas = pd.to_datetime(df_full[col_fecha], errors="coerce")
+        fechas = pd.to_datetime(df_full[col_fecha], errors="coerce", utc=True)
         fmin = fechas.min()
         fmax = fechas.max()
         if pd.notna(fmin) and pd.notna(fmax):
@@ -126,10 +126,16 @@ def aplicar_filtros(df: pd.DataFrame) -> pd.DataFrame:
     if col_ciudad and sel_ciudad:
         d = d[d[col_ciudad].astype(str).isin(sel_ciudad)]
     if col_fecha and fecha_desde and fecha_hasta:
-        f = pd.to_datetime(d[col_fecha], errors="coerce").dt.date
-        en_rango = (f >= fecha_desde) & (f <= fecha_hasta)
-        # Mantener filas sin fecha válida (no descartarlas en silencio).
-        d = d[en_rango | f.isna()]
+        try:
+            # Normalizamos todo a UTC para evitar choques de tipo/zona horaria.
+            f = pd.to_datetime(d[col_fecha], errors="coerce", utc=True)
+            desde = pd.Timestamp(fecha_desde, tz="UTC")
+            hasta = pd.Timestamp(fecha_hasta, tz="UTC") + pd.Timedelta(days=1)
+            en_rango = (f >= desde) & (f < hasta)
+            # Mantener filas sin fecha válida (no descartarlas en silencio).
+            d = d[en_rango | f.isna()]
+        except Exception:
+            pass  # ante cualquier problema con fechas, no filtramos por fecha (no rompemos la app)
     return d
 
 
