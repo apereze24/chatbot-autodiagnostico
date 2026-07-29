@@ -114,10 +114,6 @@ if llm.disponible():
 else:
     st.sidebar.error("🧠 IA: SIN CONECTAR. Falta la clave GEMINI_API_KEY.")
 
-if st.sidebar.button("🧹 Limpiar conversación", use_container_width=True):
-    st.session_state.historial = []
-    st.rerun()
-
 st.sidebar.caption(f"Fuente de datos: {st.session_state.get('fuente', '—')}")
 
 
@@ -138,7 +134,15 @@ def aplicar_filtros(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # --- Encabezado --------------------------------------------------------------
-st.title("🤖 Chatbot de Autodiagnóstico")
+col_titulo, col_reset = st.columns([4, 1])
+with col_titulo:
+    st.title("🤖 Chatbot de Autodiagnóstico")
+with col_reset:
+    st.write("")  # pequeño espacio para alinear el botón con el título
+    if st.button("🔄 Reiniciar chat", use_container_width=True,
+                 help="Borra la conversación y empieza de cero (sin recargar la página)."):
+        st.session_state.historial = []
+        st.rerun()
 st.caption(
     "Pregúntame lo que quieras sobre los autodiagnósticos. Entiendo preguntas "
     "libres y respondo con cifras y gráficos consultando los datos."
