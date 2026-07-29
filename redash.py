@@ -38,16 +38,27 @@ def _headers(key: str) -> dict:
     return {"Authorization": f"Key {key}"}
 
 
+# Columnas que son fechas pero llegan como texto: se convierten a fecha real
+# para que el chatbot pueda agrupar por mes/año/semana y comparar sin errores.
+_COLS_FECHA = [
+    "started_at", "finished_at", "created_at",
+    "ticket_create_date", "ticket_close_date",
+]
+
+
 def _normalizar(df: pd.DataFrame) -> pd.DataFrame:
-    """Agrega columnas numéricas útiles (guardadas por si el chatbot pregunta cálculos)."""
+    """Convierte fechas a tipo fecha y agrega columnas numéricas útiles."""
     if df.empty:
         return df
+    for c in _COLS_FECHA:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
     if "duration_seconds" in df.columns:
         df["duracion_min"] = (pd.to_numeric(df["duration_seconds"], errors="coerce") / 60).round(2)
     if "ticket_create_date" in df.columns and "ticket_close_date" in df.columns:
-        creado = pd.to_datetime(df["ticket_create_date"], errors="coerce")
-        cerrado = pd.to_datetime(df["ticket_close_date"], errors="coerce")
-        df["ticket_resolucion_horas"] = ((cerrado - creado).dt.total_seconds() / 3600).round(2)
+        df["ticket_resolucion_horas"] = (
+            (df["ticket_close_date"] - df["ticket_create_date"]).dt.total_seconds() / 3600
+        ).round(2)
     return df
 
 

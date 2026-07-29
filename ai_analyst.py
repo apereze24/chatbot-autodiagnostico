@@ -67,8 +67,10 @@ PISTAS_COLUMNAS = {
                                "(cierre - apertura). Úsalo para 'qué tan rápido "
                                "resuelven'. Solo tiene valor si el ticket ya cerró.",
     "nombre_ciudad": "ciudad del cliente.",
-    "started_at": "fecha/hora de inicio del autodiagnóstico.",
+    "started_at": "fecha/hora de inicio del autodiagnóstico. ÚSALA para análisis "
+                  "temporal (por mes, semana, día, hora).",
     "finished_at": "fecha/hora de fin del autodiagnóstico.",
+    "created_at": "fecha/hora de registro de la fila; para análisis temporal prefiere started_at.",
     "client_id": "id del cliente.",
     "client_name": "nombre del cliente.",
 }
