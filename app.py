@@ -57,11 +57,12 @@ def buscar_columna(df: pd.DataFrame, candidatos: list[str]) -> str | None:
 st.sidebar.title("🔎 Filtros")
 
 if st.sidebar.button("🔄 Actualizar datos", use_container_width=True):
-    with st.spinner("Actualizando desde Redash…"):
+    with st.spinner("Trayendo el último resultado de Redash…"):
         try:
-            st.session_state.df = cargar_datos(refrescar=True)
+            # Trae el último resultado ya calculado en Redash (rápido, sin re-ejecutar).
+            st.session_state.df = cargar_datos(refrescar=False)
             st.session_state.pop("error_carga", None)
-            st.sidebar.success("Datos actualizados.")
+            st.sidebar.success(f"Datos actualizados: {len(st.session_state.df):,} filas.")
             df_full = st.session_state.df
         except Exception as e:
             st.sidebar.error(f"No pude actualizar: {e}")
