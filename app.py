@@ -9,6 +9,9 @@ Cómo ejecutar (desde la carpeta del proyecto):
     .venv\\Scripts\\streamlit run app.py
 """
 
+import hmac
+import os
+
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -20,6 +23,40 @@ import redash
 load_dotenv()
 
 st.set_page_config(page_title="Chatbot Autodiagnóstico", page_icon="🤖", layout="wide")
+
+
+# --- Control de acceso (usuario + clave) -------------------------------------
+def _control_acceso() -> bool:
+    """Muestra una pantalla de login. Devuelve True si el acceso está permitido.
+
+    Las credenciales se leen de APP_USER / APP_PASSWORD (en .env local o en
+    Secrets de Streamlit). Si no están configuradas, el acceso queda abierto
+    (para no bloquear durante la configuración inicial)."""
+    usuario_ok = os.environ.get("APP_USER", "")
+    clave_ok = os.environ.get("APP_PASSWORD", "")
+
+    if not clave_ok:  # sin credenciales configuradas -> acceso abierto
+        return True
+    if st.session_state.get("acceso_ok"):
+        return True
+
+    st.markdown("## 🔒 Acceso al Chatbot de Autodiagnóstico")
+    st.caption("Ingresa tus credenciales para continuar.")
+    with st.form("login"):
+        u = st.text_input("Usuario")
+        c = st.text_input("Contraseña", type="password")
+        entrar = st.form_submit_button("Entrar")
+    if entrar:
+        if hmac.compare_digest(u, usuario_ok) and hmac.compare_digest(c, clave_ok):
+            st.session_state.acceso_ok = True
+            st.rerun()
+        else:
+            st.error("Usuario o contraseña incorrectos.")
+    return False
+
+
+if not _control_acceso():
+    st.stop()
 
 
 # --- Carga de datos ----------------------------------------------------------
