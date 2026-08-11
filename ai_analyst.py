@@ -75,7 +75,11 @@ PISTAS_COLUMNAS = {
                      "'CANCELED'=el proceso se canceló; "
                      "'ERROR'=hubo un error técnico. "
                      "Úsala para preguntas sobre QUÉ SE LE DIJO/ENTREGÓ al cliente, "
-                     "o el desenlace/resultado final del autodiagnóstico.",
+                     "o el desenlace/resultado final del autodiagnóstico. "
+                     "IMPORTANTE: este registro empezó a capturarse recientemente, "
+                     "así que los autodiagnósticos anteriores lo tienen vacío (NULL). "
+                     "Al analizarla, filtra 'final_outcome IS NOT NULL' para no "
+                     "mezclar los registros que aún no tenían este dato.",
     "nombre_ciudad": "ciudad del cliente.",
     "started_at": "fecha/hora de inicio del autodiagnóstico. ÚSALA para análisis "
                   "temporal (por mes, semana, día, hora).",
