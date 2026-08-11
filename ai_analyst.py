@@ -66,6 +66,16 @@ PISTAS_COLUMNAS = {
     "ticket_resolucion_horas": "horas que tardó en resolverse el ticket "
                                "(cierre - apertura). Úsalo para 'qué tan rápido "
                                "resuelven'. Solo tiene valor si el ticket ya cerró.",
+    "final_outcome": "DIRECTRIZ FINAL entregada al cliente al terminar el "
+                     "autodiagnóstico (el desenlace que se le comunicó). Valores: "
+                     "'ALL_OK'=todo bien, sin problema; "
+                     "'TICKET_CREATED'=se generó un ticket para revisión manual; "
+                     "'CREDIT_RECHARGED'=se recargó crédito al cliente; "
+                     "'BLOCKED'=proceso bloqueado (ej. incidente abierto); "
+                     "'CANCELED'=el proceso se canceló; "
+                     "'ERROR'=hubo un error técnico. "
+                     "Úsala para preguntas sobre QUÉ SE LE DIJO/ENTREGÓ al cliente, "
+                     "o el desenlace/resultado final del autodiagnóstico.",
     "nombre_ciudad": "ciudad del cliente.",
     "started_at": "fecha/hora de inicio del autodiagnóstico. ÚSALA para análisis "
                   "temporal (por mes, semana, día, hora).",

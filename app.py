@@ -108,12 +108,19 @@ col_estado = buscar_columna(df_full, ["estado", "stage", "status"])
 col_canal = buscar_columna(df_full, ["canal", "origen", "origin", "source", "channel"])
 col_ciudad = buscar_columna(df_full, ["ciudad", "city", "locality"])
 col_fecha = buscar_columna(df_full, ["fecha", "inicio", "started", "date", "created"])
+col_outcome = buscar_columna(df_full, ["final_outcome", "outcome", "directriz"])
 
 # Filtros seleccionados
-sel_estado, sel_canal, sel_ciudad = [], [], []
+sel_estado, sel_canal, sel_ciudad, sel_outcome = [], [], [], []
 fecha_desde = fecha_hasta = None
 
 if not df_full.empty:
+    if col_outcome:
+        opciones = sorted(df_full[col_outcome].dropna().astype(str).unique())
+        sel_outcome = st.sidebar.multiselect(
+            "Directriz entregada al cliente", opciones,
+            help="Desenlace final que se le comunicó al cliente (ALL_OK, "
+                 "TICKET_CREATED, CREDIT_RECHARGED, BLOCKED, CANCELED, ERROR).")
     if col_estado:
         opciones = sorted(df_full[col_estado].dropna().astype(str).unique())
         sel_estado = st.sidebar.multiselect("Estado del ticket", opciones)
@@ -156,6 +163,8 @@ st.sidebar.caption(f"Fuente de datos: {st.session_state.get('fuente', '—')}")
 
 def aplicar_filtros(df: pd.DataFrame) -> pd.DataFrame:
     d = df
+    if col_outcome and sel_outcome:
+        d = d[d[col_outcome].astype(str).isin(sel_outcome)]
     if col_estado and sel_estado:
         d = d[d[col_estado].astype(str).isin(sel_estado)]
     if col_canal and sel_canal:
