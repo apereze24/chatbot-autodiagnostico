@@ -72,6 +72,64 @@ SQL: SELECT failure_reason AS causa, COUNT(*) AS casos,
      GROUP BY failure_reason ORDER BY casos DESC
 """.strip()
 
+# Traducción de códigos técnicos a lenguaje entendible.
+# Se aplica a la TABLA que se muestra en pantalla (además de lo que redacta la IA),
+# para que el usuario nunca vea un código suelto en inglés.
+TRADUCCIONES = {
+    # failure_reason
+    "CPE_OFFLINE": "Módem apagado o desconectado",
+    "CPE_LOSS_OF_SIGNAL": "Módem sin señal de fibra (LOS)",
+    "CPE_NOT_FOUND": "No se encontró el módem del cliente",
+    "CPE_GPON_POWER_LOW": "Potencia óptica baja (señal débil)",
+    "CPE_STATE_NOT_UP": "Módem no está en estado operativo",
+    "CLIENT_HAS_OPEN_INCIDENT": "El cliente ya tenía un incidente abierto",
+    "CLIENT_AFFECTED_BY_KRILL_ALARM": "Cliente afectado por una falla masiva",
+    "CLIENT_STATUS_INACTIVE": "Cliente inactivo o suspendido",
+    "DAILY_CREDIT_LIMIT_REACHED": "Alcanzó el límite diario de crédito",
+    "TIMEOUT_EXCEEDED": "El proceso superó el tiempo máximo",
+    "PING_BATCH_RETRY_FAILED": "Fallaron los reintentos de ping al módem",
+    "KRILL_POST_FAILED": "Falló el registro en el sistema Krill",
+    # status del proceso
+    "finished": "Completado",
+    "failed": "Fallido",
+    "canceled": "Escaló a ticket",
+    "running": "En curso",
+    # final_outcome
+    "ALL_OK": "Todo bien, sin problema",
+    "TICKET_CREATED": "Se generó un ticket",
+    "CREDIT_RECHARGED": "Se recargó crédito",
+    "BLOCKED": "Proceso bloqueado",
+    "CANCELED": "Proceso cancelado",
+    "ERROR": "Error técnico",
+}
+
+
+def traducir_tabla(tabla: pd.DataFrame) -> pd.DataFrame:
+    """Agrega una columna legible al lado de cada columna que traiga códigos técnicos.
+    No reemplaza el código original (por si alguien lo necesita)."""
+    if tabla is None or tabla.empty:
+        return tabla
+    t = tabla.copy()
+    for col in list(t.columns):
+        # Solo columnas de texto (según la versión de pandas: 'object' o 'str').
+        if str(t[col].dtype) not in ("object", "str", "string"):
+            continue
+        valores = t[col].dropna().astype(str)
+        if valores.empty:
+            continue
+        # Solo si la mayoría de los valores son códigos conocidos.
+        conocidos = valores.isin(TRADUCCIONES).mean()
+        if conocidos < 0.6:
+            continue
+        nueva = t[col].astype(str).map(TRADUCCIONES).fillna(t[col])
+        if nueva.equals(t[col].astype(str)):
+            continue
+        nombre = f"{col} (en palabras)"
+        if nombre not in t.columns:
+            t.insert(t.columns.get_loc(col) + 1, nombre, nueva)
+    return t
+
+
 # Palabras prohibidas en la SQL (solo permitimos lectura).
 PROHIBIDAS = re.compile(
     r"\b(insert|update|delete|drop|create|alter|attach|copy|install|load|"
@@ -246,6 +304,12 @@ def ejecutar_sql(df: pd.DataFrame, sql: str) -> pd.DataFrame:
 def redactar_respuesta(pregunta: str, resultado: pd.DataFrame, historial=None) -> str:
     """Paso 3: la IA redacta una respuesta en español a partir del resultado."""
     muestra = resultado.head(50).to_csv(index=False)
+    conocimiento = conocimiento_negocio()
+    bloque_conocimiento = (
+        f"\n\n=== CONOCIMIENTO DEL NEGOCIO (glosario y traducciones) ===\n"
+        f"{conocimiento}\n"
+        if conocimiento else ""
+    )
     system = (
         "Eres un analista que explica resultados de datos a una persona no "
         "técnica, en español, de forma breve y clara. Te doy la pregunta y el "
@@ -253,7 +317,17 @@ def redactar_respuesta(pregunta: str, resultado: pd.DataFrame, historial=None) -
         "Responde la pregunta directamente citando las cifras del resultado. "
         "Mantienes una conversación: puedes referirte a lo hablado antes si aporta. "
         "No inventes datos que no estén en el resultado. Si el resultado está "
-        "vacío, dilo. Máximo 4 frases; la tabla y el gráfico se muestran aparte."
+        "vacío, dilo. Máximo 6 frases; la tabla y el gráfico se muestran aparte."
+        "\n\nOBLIGATORIO — traduce SIEMPRE los códigos técnicos a lenguaje "
+        "entendible usando el glosario de abajo, y escribe el código original "
+        "entre paréntesis. Ejemplos del formato esperado:\n"
+        "  CPE_OFFLINE            -> \"el módem está apagado o desconectado (CPE_OFFLINE)\"\n"
+        "  CPE_LOSS_OF_SIGNAL     -> \"el módem perdió señal de fibra (CPE_LOSS_OF_SIGNAL)\"\n"
+        "  status='canceled'      -> \"escaló a un ticket (canceled)\"\n"
+        "  final_outcome='ALL_OK' -> \"todo bien, sin problema (ALL_OK)\"\n"
+        "Nunca dejes un código en inglés sin explicar. Si un código no está en "
+        "el glosario, explícalo con tu mejor interpretación y adviértelo."
+        f"{bloque_conocimiento}"
     )
     user = f"Pregunta: {pregunta}\n\nResultado de la consulta (CSV):\n{muestra}"
     return llm.generar_texto(system, user, max_tokens=600, historial=historial)
@@ -342,6 +416,7 @@ def responder(pregunta: str, df: pd.DataFrame, historial=None) -> dict:
                 salida["error"] = f"La consulta falló al ejecutarse: {e}"
                 return salida
 
+    tabla = traducir_tabla(tabla)
     salida["tabla"] = tabla
 
     if tabla.empty:
