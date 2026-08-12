@@ -168,6 +168,16 @@ def _gemini_call(system: str, user: str, extra_config: dict, historial=None):
             return resp
         except Exception as e:
             msg = str(e)
+            # Si el modelo no soporta razonamiento extendido, reintentar sin él.
+            if "thinking" in msg.lower() and "thinking_config" in config:
+                cfg2 = {k: v for k, v in config.items() if k != "thinking_config"}
+                try:
+                    resp = client.models.generate_content(
+                        model=modelo, contents=contents, config=cfg2)
+                    _GEMINI_MODELO_CACHE = modelo
+                    return resp
+                except Exception as e2:
+                    msg = str(e2)
             if _rate_limit_real(msg):
                 raise RuntimeError(
                     "Se alcanzó el límite de uso por el momento. "
@@ -184,14 +194,30 @@ def _gemini_call(system: str, user: str, extra_config: dict, historial=None):
 
 
 # --- API pública -------------------------------------------------------------
+def _thinking_config():
+    """Razonamiento extendido: el modelo 'piensa' antes de responder.
+    Se puede desactivar con RAZONAMIENTO=off (más rápido, menos preciso)."""
+    if os.environ.get("RAZONAMIENTO", "").strip().lower() in ("off", "0", "no"):
+        return None
+    try:
+        from google.genai import types
+        return types.ThinkingConfig(thinking_level="high")
+    except Exception:
+        return None
+
+
 def generar_json(system: str, user: str, schema: type[BaseModel], historial=None) -> BaseModel:
     if not disponible():
         raise RuntimeError("No hay clave de Gemini configurada (GEMINI_API_KEY).")
-    resp = _gemini_call(system, user, {
+    cfg = {
         "response_mime_type": "application/json",
         "response_schema": schema,
-        "max_output_tokens": 4096,
-    }, historial)
+        "max_output_tokens": 8192,
+    }
+    tc = _thinking_config()
+    if tc is not None:
+        cfg["thinking_config"] = tc
+    resp = _gemini_call(system, user, cfg, historial)
     if getattr(resp, "parsed", None) is not None:
         return resp.parsed
     return schema.model_validate_json(resp.text)

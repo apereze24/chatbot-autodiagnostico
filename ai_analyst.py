@@ -14,6 +14,7 @@ El número SIEMPRE sale de los datos (paso 2); la IA solo traduce y explica.
 Requiere una clave de API de Claude (ANTHROPIC_API_KEY).
 """
 
+import os
 import re
 
 import duckdb
@@ -24,6 +25,52 @@ import llm
 
 TABLA = "autodiagnosticos"
 LIMITE_FILAS = 2000  # tope de filas que puede devolver una consulta
+
+# Conocimiento del negocio editable por el usuario (glosario, reglas, métricas).
+ARCHIVO_CONOCIMIENTO = "conocimiento.md"
+
+
+def conocimiento_negocio() -> str:
+    """Lee conocimiento.md. Si no existe, no pasa nada (el chatbot sigue igual)."""
+    try:
+        ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            ARCHIVO_CONOCIMIENTO)
+        with open(ruta, encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+# Ejemplos de referencia: enseñan a la IA el ESTILO de consulta esperado.
+# No son respuestas fijas; guían cómo estructurar SQL para preguntas nuevas.
+EJEMPLOS = """
+Ejemplos del tipo de consulta esperada (adapta la lógica a la pregunta real):
+
+P: ¿Cuál es la tasa de éxito por canal?
+SQL: SELECT source AS canal, COUNT(*) AS total,
+       COUNT(*) FILTER (WHERE status='finished') AS completados,
+       ROUND(100.0*COUNT(*) FILTER (WHERE status='finished')/COUNT(*),1) AS pct_exito
+     FROM autodiagnosticos GROUP BY source ORDER BY pct_exito DESC
+
+P: ¿Qué equipo resuelve más rápido los tickets?
+SQL: SELECT ticket_team AS equipo, COUNT(*) AS tickets_resueltos,
+       ROUND(AVG(ticket_resolucion_horas),1) AS horas_promedio,
+       ROUND(QUANTILE_CONT(ticket_resolucion_horas,0.5),1) AS horas_mediana
+     FROM autodiagnosticos
+     WHERE ticket_stage='Solved' AND ticket_resolucion_horas IS NOT NULL
+     GROUP BY ticket_team ORDER BY horas_promedio ASC
+
+P: ¿Cuántos autodiagnósticos hubo mes a mes?
+SQL: SELECT strftime(started_at,'%Y-%m') AS mes, COUNT(*) AS total
+     FROM autodiagnosticos WHERE started_at IS NOT NULL
+     GROUP BY 1 ORDER BY 1
+
+P: ¿Cuáles son las principales causas de falla?
+SQL: SELECT failure_reason AS causa, COUNT(*) AS casos,
+       ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER (),1) AS pct
+     FROM autodiagnosticos WHERE failure_reason IS NOT NULL
+     GROUP BY failure_reason ORDER BY casos DESC
+""".strip()
 
 # Palabras prohibidas en la SQL (solo permitimos lectura).
 PROHIBIDAS = re.compile(
@@ -136,21 +183,46 @@ def validar_sql(sql: str) -> str | None:
     return None
 
 
-def generar_sql(pregunta: str, df: pd.DataFrame, historial=None) -> dict:
-    """Paso 1: la IA traduce la pregunta a SQL. Devuelve dict con sql y metadatos."""
+def generar_sql(pregunta: str, df: pd.DataFrame, historial=None,
+                error_previo: str = "", sql_previo: str = "") -> dict:
+    """Paso 1: la IA traduce la pregunta a SQL. Devuelve dict con sql y metadatos.
+    Si se pasa error_previo, la IA corrige su intento anterior."""
+    conocimiento = conocimiento_negocio()
+    bloque_conocimiento = (
+        f"\n\n=== CONOCIMIENTO DEL NEGOCIO ===\n{conocimiento}\n"
+        if conocimiento else ""
+    )
     system = (
-        "Eres un analista de datos que responde preguntas sobre un proceso "
-        "llamado 'autodiagnóstico' (diagnóstico del módem de wifi de clientes). "
-        "Traduce la pregunta del usuario a UNA consulta SQL de solo lectura "
-        "(SELECT) sobre la tabla descrita abajo. No inventes columnas.\n\n"
-        f"{esquema_texto(df)}\n\n"
+        "Eres un analista de datos senior especializado en el proceso de "
+        "'autodiagnóstico' (diagnóstico remoto del módem de wifi de clientes de "
+        "un operador de internet). Traduce la pregunta del usuario a UNA consulta "
+        "SQL de solo lectura (SELECT) sobre la tabla descrita abajo.\n\n"
+        "Antes de escribir el SQL, razona: ¿qué está preguntando realmente? "
+        "¿qué columnas lo responden? ¿hay que excluir nulos o filtrar algún "
+        "estado? ¿conviene mostrar también el conteo o el porcentaje para dar "
+        "contexto? Prefiere respuestas que aporten perspectiva (totales, "
+        "porcentajes, comparativas) sobre cifras sueltas, sin desviarte de lo "
+        "que se preguntó.\n\n"
+        f"{esquema_texto(df)}"
+        f"{bloque_conocimiento}\n"
+        f"{EJEMPLOS}\n\n"
         "Mantienes una conversación: si la pregunta es un seguimiento (ej. "
         "'¿y por ciudad?', 'desglósalo por mes', 'y de esos, cuántos fallaron'), "
         "úsala junto con los turnos anteriores para entender a qué se refiere.\n"
+        "No inventes columnas: usa solo las listadas. "
         "Si la pregunta NO se puede responder con esta tabla, pon "
         "se_puede_responder=false y deja sql vacío."
     )
-    r = llm.generar_json(system, pregunta, ConsultaSQL, historial=historial)
+    entrada = pregunta
+    if error_previo:
+        entrada = (
+            f"{pregunta}\n\n"
+            f"[Tu consulta anterior falló. Corrígela.]\n"
+            f"SQL que falló:\n{sql_previo}\n"
+            f"Error de la base de datos:\n{error_previo}\n"
+            f"Devuelve una consulta corregida que evite ese error."
+        )
+    r = llm.generar_json(system, entrada, ConsultaSQL, historial=historial)
     columna_x = (r.columna_x or "").strip() if r else ""
     return {
         "sql": (r.sql or "").strip() if r else "",
@@ -246,11 +318,29 @@ def responder(pregunta: str, df: pd.DataFrame, historial=None) -> dict:
         salida["error"] = f"La consulta generada no es segura: {error_sql}"
         return salida
 
-    try:
-        tabla = ejecutar_sql(df, plan["sql"])
-    except Exception as e:
-        salida["error"] = f"La consulta falló al ejecutarse: {e}"
-        return salida
+    # Auto-corrección: si la consulta falla, la IA ve el error y lo intenta arreglar.
+    intento = 0
+    while intento < 2:
+        try:
+            tabla = ejecutar_sql(df, plan["sql"])
+            break
+        except Exception as e:
+            intento += 1
+            if intento >= 2:
+                salida["error"] = f"La consulta falló al ejecutarse: {e}"
+                return salida
+            try:
+                plan = generar_sql(pregunta, df, historial=hist_sql,
+                                   error_previo=str(e), sql_previo=plan["sql"])
+                if not plan.get("sql") or validar_sql(plan["sql"]):
+                    salida["error"] = f"La consulta falló al ejecutarse: {e}"
+                    return salida
+                salida["sql"] = plan["sql"]
+                salida["tipo_grafico"] = plan["tipo_grafico"]
+                salida["columna_x"] = plan["columna_x"]
+            except Exception:
+                salida["error"] = f"La consulta falló al ejecutarse: {e}"
+                return salida
 
     salida["tabla"] = tabla
 
