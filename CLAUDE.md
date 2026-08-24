@@ -136,9 +136,17 @@ Ciudad. Botón "Actualizar". Se detectan por nombre de columna automáticamente
 - [x] Filtros ajustados a los valores reales (directriz, estado, canal, ciudad, fecha).
 - [x] Termómetro de actividad por hora, con alerta de picos y explicación por
   causa/canal/ciudad, en su propia pestaña.
-- [~] Correo de alerta al equipo de CX: código y programador listos; falta que el
-  usuario cree los Secrets en GitHub (`SMTP_USUARIO`, `SMTP_CLAVE`, los 3 de
-  Redash) para que empiece a enviar. Nunca se ha enviado un correo de prueba.
+- [x] Correo de alerta al equipo de CX, corriendo en GitHub Actions cada hora.
+  Secrets creados y **envío verificado desde Actions** (24-ago-2026) con
+  `modo: probar-envio`. Envía desde una cuenta de Gmail externa con contraseña
+  de aplicación, porque Workspace de Fibrazo tiene bloqueadas las contraseñas de
+  aplicación en las cuentas de la empresa. **Pendiente**: pedirle a TI una cuenta
+  interna o un relay SMTP, y que entre tanto los 5 destinatarios marquen el
+  remitente como "no es spam" — un remitente externo automático es candidato a
+  filtro.
+- [ ] Vigilar: en repos públicos, GitHub desactiva los workflows programados si
+  el repo pasa 60 días sin actividad. Si la alerta deja de llegar, revisar eso
+  primero.
 - [ ] Pendiente técnico: `use_container_width` está deprecado en Streamlit
   (reemplazar por `width="stretch"` / `width="content"` en `app.py`).
 
