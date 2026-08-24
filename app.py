@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 import ai_analyst
 import llm
 import redash
+import termometro
 
 load_dotenv()
 
@@ -94,10 +95,12 @@ def buscar_columna(df: pd.DataFrame, candidatos: list[str]) -> str | None:
 st.sidebar.title("🔎 Filtros")
 
 if st.sidebar.button("🔄 Actualizar datos", use_container_width=True):
-    with st.spinner("Trayendo el último resultado de Redash…"):
+    with st.spinner("Actualizando desde Redash… tarda cerca de medio minuto."):
         try:
-            # Trae el último resultado ya calculado en Redash (rápido, sin re-ejecutar).
-            st.session_state.df = cargar_datos(refrescar=False)
+            # Corre la consulta DE NUEVO en Redash. Es lento, pero es lo que el
+            # botón promete: el resultado en caché de Redash se recalcula una vez
+            # al día, así que sin esto el termómetro mostraría datos de ayer.
+            st.session_state.df = cargar_datos(refrescar=True)
             st.session_state.pop("error_carga", None)
             st.sidebar.success(f"Datos actualizados: {len(st.session_state.df):,} filas.")
             df_full = st.session_state.df
@@ -109,6 +112,7 @@ col_canal = buscar_columna(df_full, ["canal", "origen", "origin", "source", "cha
 col_ciudad = buscar_columna(df_full, ["ciudad", "city", "locality"])
 col_fecha = buscar_columna(df_full, ["fecha", "inicio", "started", "date", "created"])
 col_outcome = buscar_columna(df_full, ["final_outcome", "outcome", "directriz"])
+col_causa = buscar_columna(df_full, ["failure_reason", "causa"])
 
 # Filtros seleccionados
 sel_estado, sel_canal, sel_ciudad, sel_outcome = [], [], [], []
@@ -140,6 +144,10 @@ if not df_full.empty:
                                         min_value=fmin.date(), max_value=fmax.date())
             fecha_hasta = c2.date_input("Hasta", value=fmax.date(),
                                         min_value=fmin.date(), max_value=fmax.date())
+            st.sidebar.caption(
+                "El rango de fechas aplica al chat. El termómetro siempre muestra "
+                "un día completo, y ese día se elige en su propia pestaña."
+            )
 
 st.sidebar.markdown("---")
 
@@ -161,7 +169,9 @@ else:
 st.sidebar.caption(f"Fuente de datos: {st.session_state.get('fuente', '—')}")
 
 
-def aplicar_filtros(df: pd.DataFrame) -> pd.DataFrame:
+def aplicar_filtros(df: pd.DataFrame, incluir_fecha: bool = True) -> pd.DataFrame:
+    """Aplica los filtros de la barra lateral. Con incluir_fecha=False se omite el
+    rango de fechas (lo usa el termómetro, que tiene su propio selector de día)."""
     d = df
     if col_outcome and sel_outcome:
         d = d[d[col_outcome].astype(str).isin(sel_outcome)]
@@ -171,7 +181,7 @@ def aplicar_filtros(df: pd.DataFrame) -> pd.DataFrame:
         d = d[d[col_canal].astype(str).isin(sel_canal)]
     if col_ciudad and sel_ciudad:
         d = d[d[col_ciudad].astype(str).isin(sel_ciudad)]
-    if col_fecha and fecha_desde and fecha_hasta:
+    if incluir_fecha and col_fecha and fecha_desde and fecha_hasta:
         try:
             # Normalizamos todo a UTC para evitar choques de tipo/zona horaria.
             f = pd.to_datetime(d[col_fecha], errors="coerce", utc=True)
@@ -186,28 +196,15 @@ def aplicar_filtros(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # --- Encabezado --------------------------------------------------------------
-col_titulo, col_reset = st.columns([4, 1])
-with col_titulo:
-    st.title("🤖 Chatbot de Autodiagnóstico")
-with col_reset:
-    st.write("")  # pequeño espacio para alinear el botón con el título
-    if st.button("🔄 Reiniciar chat", use_container_width=True,
-                 help="Borra la conversación y empieza de cero (sin recargar la página)."):
-        st.session_state.historial = []
-        st.rerun()
-st.caption(
-    "Pregúntame lo que quieras sobre los autodiagnósticos. Entiendo preguntas "
-    "libres y respondo con cifras y gráficos consultando los datos."
-)
+st.title("🤖 Chatbot de Autodiagnóstico")
 
 if "error_carga" in st.session_state:
     st.error(f"No pude cargar los datos: {st.session_state.error_carga}")
 
-if not df_full.empty:
-    df_filtrado = aplicar_filtros(df_full)
-    st.caption(f"Registros tras filtros: **{len(df_filtrado):,}** de {len(df_full):,}")
-else:
-    df_filtrado = df_full
+df_filtrado = aplicar_filtros(df_full) if not df_full.empty else df_full
+
+# Dos pestañas: el chat de preguntas libres y el dashboard por hora.
+tab_chat, tab_termometro = st.tabs(["💬  Chat", "🌡️  Termómetro por hora"])
 
 
 # --- Render de un resultado --------------------------------------------------
@@ -238,25 +235,48 @@ def render_resultado(res: dict):
             st.code(res["sql"], language="sql")
 
 
-# --- Chat --------------------------------------------------------------------
+# --- Pestaña 1: chat ---------------------------------------------------------
 if "historial" not in st.session_state:
     st.session_state.historial = []
 
-for turno in st.session_state.historial:
-    with st.chat_message(turno["rol"]):
-        if turno["rol"] == "user":
-            st.markdown(turno["texto"])
-        else:
-            render_resultado(turno["resultado"])
+with tab_chat:
+    col_intro, col_reset = st.columns([4, 1])
+    with col_intro:
+        st.caption(
+            "Pregúntame lo que quieras sobre los autodiagnósticos. Entiendo preguntas "
+            "libres y respondo con cifras y gráficos consultando los datos."
+        )
+        if not df_full.empty:
+            st.caption(f"Registros tras filtros: **{len(df_filtrado):,}** "
+                       f"de {len(df_full):,}")
+    with col_reset:
+        if st.button("🔄 Reiniciar chat", use_container_width=True,
+                     help="Borra la conversación y empieza de cero (sin recargar la página)."):
+            st.session_state.historial = []
+            st.rerun()
 
-pregunta = st.chat_input("Escribe tu pregunta sobre los autodiagnósticos…")
-if pregunta:
-    historial_previo = list(st.session_state.historial)  # memoria de turnos anteriores
-    with st.chat_message("user"):
-        st.markdown(pregunta)
-    st.session_state.historial.append({"rol": "user", "texto": pregunta})
-    with st.chat_message("assistant"):
-        with st.spinner("Consultando los datos…"):
-            res = ai_analyst.responder(pregunta, df_filtrado, historial=historial_previo)
-        render_resultado(res)
-    st.session_state.historial.append({"rol": "assistant", "resultado": res})
+    for turno in st.session_state.historial:
+        with st.chat_message(turno["rol"]):
+            if turno["rol"] == "user":
+                st.markdown(turno["texto"])
+            else:
+                render_resultado(turno["resultado"])
+
+    pregunta = st.chat_input("Escribe tu pregunta sobre los autodiagnósticos…")
+    if pregunta:
+        historial_previo = list(st.session_state.historial)  # memoria de turnos anteriores
+        with st.chat_message("user"):
+            st.markdown(pregunta)
+        st.session_state.historial.append({"rol": "user", "texto": pregunta})
+        with st.chat_message("assistant"):
+            with st.spinner("Consultando los datos…"):
+                res = ai_analyst.responder(pregunta, df_filtrado, historial=historial_previo)
+            render_resultado(res)
+        st.session_state.historial.append({"rol": "assistant", "resultado": res})
+
+# --- Pestaña 2: termómetro por hora ------------------------------------------
+# Hereda los filtros de la barra lateral MENOS el de fecha: el día lo elige el
+# propio dashboard, porque siempre muestra un día completo hora por hora.
+with tab_termometro:
+    termometro.render(aplicar_filtros(df_full, incluir_fecha=False),
+                      col_fecha, col_causa, col_canal, col_ciudad)

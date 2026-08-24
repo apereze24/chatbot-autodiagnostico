@@ -1,0 +1,7 @@
+# Dependencias SOLO para el correo de alerta (alertas.py).
+# Es una lista aparte a propósito: la alerta corre cada hora en un servidor y no
+# necesita Streamlit, DuckDB ni las librerías de IA. Instalar solo esto baja cada
+# corrida de ~90 segundos a ~15, y con eso cabe de sobra en la capa gratuita.
+pandas>=2.2
+requests>=2.31
+python-dotenv>=1.0

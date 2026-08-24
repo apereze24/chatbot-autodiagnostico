@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+.alerta_estado.json
+alerta_prueba.html

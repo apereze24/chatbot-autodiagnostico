@@ -1,0 +1,71 @@
+# Revisa cada hora si los autodiagnósticos se dispararon y, si sí, manda correo
+# al equipo de CX.
+#
+# ¿Por qué aquí y no dentro de la app? Porque la app de Streamlit solo se ejecuta
+# cuando alguien tiene la página abierta. Si nadie la abre, no habría alerta. Esto
+# corre solo en los servidores de GitHub, con la página cerrada.
+#
+# ANTES DE QUE FUNCIONE hay que crear los "secrets" del repositorio en:
+#   GitHub -> el repo -> Settings -> Secrets and variables -> Actions -> New secret
+# Obligatorios: REDASH_URL, REDASH_QUERY_ID, REDASH_API_KEY,
+#               SMTP_USUARIO, SMTP_CLAVE
+# Opcionales:   SMTP_HOST, SMTP_PORT, ALERTA_DESTINATARIOS, ALERTA_URL_APP
+
+name: Alerta de picos de autodiagnóstico
+
+on:
+  schedule:
+    # Al minuto 10 de cada hora. Está en UTC: como Colombia es UTC-5, esto cae
+    # al minuto 10 de cada hora local también (el desfase es de horas, no de
+    # minutos). Se deja el minuto 10 y no el 0 para no coincidir con el momento
+    # de más carga en GitHub, que retrasa las tareas programadas.
+    - cron: "10 * * * *"
+  # Permite lanzarla a mano desde la pestaña Actions, para probar.
+  workflow_dispatch:
+
+# Si una corrida se demora, que la siguiente espere en vez de solaparse.
+concurrency:
+  group: alerta-autodiagnostico
+  cancel-in-progress: false
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Traer el código
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-alertas.txt
+
+      - name: Instalar lo mínimo necesario
+        run: pip install -r requirements-alertas.txt
+
+      # Guarda memoria de cuál fue la última hora avisada, para no repetir el
+      # mismo correo si la tarea se vuelve a lanzar a mano.
+      - name: Recuperar el registro de avisos ya enviados
+        uses: actions/cache@v4
+        with:
+          path: .alerta_estado.json
+          key: alerta-estado-${{ github.run_id }}
+          restore-keys: |
+            alerta-estado-
+
+      - name: Revisar la última hora completa y avisar si hay pico
+        env:
+          REDASH_URL: ${{ secrets.REDASH_URL }}
+          REDASH_QUERY_ID: ${{ secrets.REDASH_QUERY_ID }}
+          REDASH_API_KEY: ${{ secrets.REDASH_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USUARIO: ${{ secrets.SMTP_USUARIO }}
+          SMTP_CLAVE: ${{ secrets.SMTP_CLAVE }}
+          ALERTA_DESTINATARIOS: ${{ secrets.ALERTA_DESTINATARIOS }}
+          ALERTA_URL_APP: ${{ secrets.ALERTA_URL_APP }}
+        run: python alertas.py

@@ -46,13 +46,33 @@ _COLS_FECHA = [
 ]
 
 
+def horas_a_local() -> float:
+    """Horas que hay que sumarle a las fechas de Redash para dejarlas en hora local.
+
+    Redash entrega las fechas en UTC. Colombia es UTC−5 (sin horario de verano),
+    así que por defecto se les resta 5 horas. Sin este ajuste, "las 8 de la noche"
+    aparecería como "la 1 de la mañana" y los picos por hora quedarían corridos.
+    Si algún día la consulta de Redash empieza a devolver hora local, poner
+    HORAS_UTC_A_LOCAL=0 en el .env / Secrets.
+    """
+    try:
+        return float(os.environ.get("HORAS_UTC_A_LOCAL", "-5"))
+    except ValueError:
+        return -5.0
+
+
 def _normalizar(df: pd.DataFrame) -> pd.DataFrame:
-    """Convierte fechas a tipo fecha y agrega columnas numéricas útiles."""
+    """Convierte fechas a tipo fecha (en hora local) y agrega columnas numéricas."""
     if df.empty:
         return df
+    desfase = pd.Timedelta(hours=horas_a_local())
     for c in _COLS_FECHA:
         if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce")
+            fechas = pd.to_datetime(df[c], errors="coerce")
+            # Si vienen con zona horaria, la quitamos primero (ya normalizadas a UTC).
+            if getattr(fechas.dtype, "tz", None) is not None:
+                fechas = fechas.dt.tz_convert("UTC").dt.tz_localize(None)
+            df[c] = fechas + desfase
     if "duration_seconds" in df.columns:
         df["duracion_min"] = (pd.to_numeric(df["duration_seconds"], errors="coerce") / 60).round(2)
     if "ticket_create_date" in df.columns and "ticket_close_date" in df.columns:

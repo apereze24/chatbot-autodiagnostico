@@ -22,6 +22,9 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 import llm
+# El glosario vive en analisis.py para que lo compartan el chat, el dashboard y
+# el correo de alerta. Se re-exporta aquí porque este módulo ya lo publicaba así.
+from analisis import TRADUCCIONES  # noqa: F401  (se usa en traducir_tabla)
 
 TABLA = "autodiagnosticos"
 LIMITE_FILAS = 2000  # tope de filas que puede devolver una consulta
@@ -71,38 +74,6 @@ SQL: SELECT failure_reason AS causa, COUNT(*) AS casos,
      FROM autodiagnosticos WHERE failure_reason IS NOT NULL
      GROUP BY failure_reason ORDER BY casos DESC
 """.strip()
-
-# Traducción de códigos técnicos a lenguaje entendible.
-# Se aplica a la TABLA que se muestra en pantalla (además de lo que redacta la IA),
-# para que el usuario nunca vea un código suelto en inglés.
-TRADUCCIONES = {
-    # failure_reason
-    "CPE_OFFLINE": "Módem apagado o desconectado",
-    "CPE_LOSS_OF_SIGNAL": "Módem sin señal de fibra (LOS)",
-    "CPE_NOT_FOUND": "No se encontró el módem del cliente",
-    "CPE_GPON_POWER_LOW": "Potencia óptica baja (señal débil)",
-    "CPE_STATE_NOT_UP": "Módem no está en estado operativo",
-    "CLIENT_HAS_OPEN_INCIDENT": "El cliente ya tenía un incidente abierto",
-    "CLIENT_AFFECTED_BY_KRILL_ALARM": "Cliente afectado por una falla masiva",
-    "CLIENT_STATUS_INACTIVE": "Cliente inactivo o suspendido",
-    "DAILY_CREDIT_LIMIT_REACHED": "Alcanzó el límite diario de crédito",
-    "TIMEOUT_EXCEEDED": "El proceso superó el tiempo máximo",
-    "PING_BATCH_RETRY_FAILED": "Fallaron los reintentos de ping al módem",
-    "KRILL_POST_FAILED": "Falló el registro en el sistema Krill",
-    # status del proceso
-    "finished": "Completado",
-    "failed": "Fallido",
-    "canceled": "Escaló a ticket",
-    "running": "En curso",
-    # final_outcome
-    "ALL_OK": "Todo bien, sin problema",
-    "TICKET_CREATED": "Se generó un ticket",
-    "CREDIT_RECHARGED": "Se recargó crédito",
-    "BLOCKED": "Proceso bloqueado",
-    "CANCELED": "Proceso cancelado",
-    "ERROR": "Error técnico",
-}
-
 
 def traducir_tabla(tabla: pd.DataFrame) -> pd.DataFrame:
     """Agrega una columna legible al lado de cada columna que traiga códigos técnicos.
