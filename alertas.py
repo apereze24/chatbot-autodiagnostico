@@ -96,6 +96,38 @@ def _si(nombre: str) -> bool:
     return os.environ.get(nombre, "").strip() in ("1", "true", "si", "sí")
 
 
+def _tapado(valor: str, correo: bool = False) -> str:
+    """Muestra que un valor llegó, sin revelarlo.
+
+    Se imprime en el registro para poder diagnosticar sin exponer nada: la
+    LONGITUD es el dato clave, porque el error más común es pegar la contraseña
+    normal en vez de la de aplicación, que tiene exactamente 16 caracteres."""
+    if not valor:
+        return "FALTA"
+    if correo and "@" in valor:
+        usuario, dominio = valor.split("@", 1)
+        return f"{usuario[:2]}{'*' * max(len(usuario) - 2, 1)}@{dominio}"
+    return f"sí, {len(valor)} caracteres"
+
+
+def diagnostico() -> None:
+    """Imprime qué configuración llegó, para no adivinar cuando algo falla."""
+    print("Configuración detectada:")
+    for nombre, correo in (("REDASH_URL", False), ("REDASH_QUERY_ID", False),
+                           ("REDASH_API_KEY", False), ("SMTP_HOST", False),
+                           ("SMTP_PORT", False), ("SMTP_USUARIO", True),
+                           ("SMTP_CLAVE", False)):
+        valor = os.environ.get(nombre, "").strip()
+        # El servidor y el puerto no son secretos: se muestran completos porque
+        # un error de dedo ahí es difícil de ver de otro modo.
+        if nombre in ("SMTP_HOST", "SMTP_PORT", "REDASH_QUERY_ID"):
+            print(f"  {nombre:18s}: {valor or 'FALTA (se usa el valor por defecto)'}")
+        else:
+            print(f"  {nombre:18s}: {_tapado(valor, correo)}")
+    print(f"  destinatarios     : {len(destinatarios())}")
+    print()
+
+
 def puede_enviar() -> bool:
     """Si hay con qué enviar. Hay dos formas válidas:
 
@@ -582,21 +614,30 @@ def main(argv=None) -> int:
                         "credenciales funcionan, sin revisar si hay pico")
     args = p.parse_args(argv)
 
+    diagnostico()
+
     destinos = ([c.strip() for c in args.solo_a.replace(";", ",").split(",")
                  if c.strip()] if args.solo_a else destinatarios())
 
     if args.probar_envio:
         asunto_txt, html, texto = correo_de_prueba()
         if not puede_enviar():
-            print("No puedo enviar: faltan SMTP_USUARIO y SMTP_CLAVE.")
-            print("Ponlos en el archivo .env (local) o en los Secrets de GitHub.")
+            print("No puedo enviar: falta SMTP_USUARIO o SMTP_CLAVE.")
+            print("Revisa arriba cuál dice FALTA. Los nombres deben ser exactos: "
+                  "SMTP_USUARIO y SMTP_CLAVE, en mayúsculas y con guion bajo.")
             return 1
         try:
             enviar(asunto_txt, html, texto, destinos)
         except Exception as e:
-            print(f"ERROR enviando el correo de prueba: {e}")
-            print("Si usas Gmail, revisa que la clave sea una CONTRASEÑA DE "
-                  "APLICACIÓN y no la contraseña normal de la cuenta.")
+            print(f"ERROR enviando el correo de prueba: {type(e).__name__}: {e}")
+            print()
+            print("Las causas más comunes, en orden:")
+            print("  1. La clave no es una CONTRASEÑA DE APLICACIÓN de 16 letras, "
+                  "sino la contraseña normal de la cuenta.")
+            print("  2. La contraseña de aplicación quedó pegada con espacios. "
+                  "Debe ir seguida, sin espacios.")
+            print("  3. La cuenta no tiene la verificación en dos pasos activada.")
+            print("  4. SMTP_USUARIO no es el correo completo.")
             return 1
         print(f"Correo de prueba enviado a: {', '.join(destinos)}")
         return 0
