@@ -22,6 +22,18 @@ on:
     - cron: "10 * * * *"
   # Permite lanzarla a mano desde la pestaña Actions, para probar.
   workflow_dispatch:
+    inputs:
+      modo:
+        description: "Qué hacer en esta corrida"
+        type: choice
+        default: revisar
+        options:
+          - revisar         # lo normal: mira si hay pico y avisa solo si lo hay
+          - probar-envio    # manda un correo de prueba para comprobar el envío
+      solo_a:
+        description: "Solo para probar-envio: a qué correo enviarlo. Si se deja vacío, va a TODO el equipo."
+        required: false
+        type: string
 
 # Si una corrida se demora, que la siguiente espere en vez de solaparse.
 concurrency:
@@ -68,4 +80,19 @@ jobs:
           SMTP_CLAVE: ${{ secrets.SMTP_CLAVE }}
           ALERTA_DESTINATARIOS: ${{ secrets.ALERTA_DESTINATARIOS }}
           ALERTA_URL_APP: ${{ secrets.ALERTA_URL_APP }}
-        run: python alertas.py
+          # Lo que se eligió al lanzarla a mano. En las corridas programadas
+          # llegan vacíos, así que cae en el modo normal.
+          # Van por env y no dentro del run para que un texto escrito a mano no
+          # pueda inyectar comandos en el script.
+          MODO: ${{ inputs.modo }}
+          SOLO_A: ${{ inputs.solo_a }}
+        run: |
+          if [ "$MODO" = "probar-envio" ]; then
+            if [ -n "$SOLO_A" ]; then
+              python alertas.py --probar-envio --solo-a "$SOLO_A"
+            else
+              python alertas.py --probar-envio
+            fi
+          else
+            python alertas.py
+          fi
