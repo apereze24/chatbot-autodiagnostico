@@ -85,9 +85,19 @@ def destinatarios() -> list[str]:
     return [c.strip() for c in crudo.replace(";", ",").split(",") if c.strip()]
 
 
+def _texto(nombre: str, defecto: str = "") -> str:
+    """Lee una variable de entorno tratando el texto vacío como "no está".
+
+    Esto importa de verdad: en GitHub Actions, un secret que no existe NO llega
+    ausente, llega como cadena vacía. Con os.environ.get(nombre, defecto) el
+    valor por defecto nunca se aplicaba, y el envío fallaba con un servidor
+    vacío y un error incomprensible."""
+    return os.environ.get(nombre, "").strip() or defecto
+
+
 def _entero(nombre: str, defecto: int) -> int:
     try:
-        return int(os.environ.get(nombre, defecto))
+        return int(_texto(nombre, str(defecto)))
     except ValueError:
         return defecto
 
@@ -111,20 +121,23 @@ def _tapado(valor: str, correo: bool = False) -> str:
 
 
 def diagnostico() -> None:
-    """Imprime qué configuración llegó, para no adivinar cuando algo falla."""
+    """Imprime qué configuración llegó, para no adivinar cuando algo falla.
+
+    Muestra el valor QUE SE VA A USAR, no el que llegó: si un secret viene vacío
+    y se aplica el valor por defecto, hay que verlo, porque confundir esas dos
+    cosas ya costó una falla difícil de leer."""
     print("Configuración detectada:")
-    for nombre, correo in (("REDASH_URL", False), ("REDASH_QUERY_ID", False),
-                           ("REDASH_API_KEY", False), ("SMTP_HOST", False),
-                           ("SMTP_PORT", False), ("SMTP_USUARIO", True),
-                           ("SMTP_CLAVE", False)):
-        valor = os.environ.get(nombre, "").strip()
-        # El servidor y el puerto no son secretos: se muestran completos porque
-        # un error de dedo ahí es difícil de ver de otro modo.
-        if nombre in ("SMTP_HOST", "SMTP_PORT", "REDASH_QUERY_ID"):
-            print(f"  {nombre:18s}: {valor or 'FALTA (se usa el valor por defecto)'}")
-        else:
-            print(f"  {nombre:18s}: {_tapado(valor, correo)}")
-    print(f"  destinatarios     : {len(destinatarios())}")
+    # El servidor y el puerto no son secretos: se muestran completos porque un
+    # error de dedo ahí es casi imposible de ver de otro modo.
+    print(f"  {'SMTP_HOST':18s}: {_texto('SMTP_HOST', 'smtp.gmail.com')}"
+          f"{'' if _texto('SMTP_HOST') else '   (no configurado, se usa este)'}")
+    print(f"  {'SMTP_PORT':18s}: {_entero('SMTP_PORT', 587)}"
+          f"{'' if _texto('SMTP_PORT') else '   (no configurado, se usa este)'}")
+    for nombre, correo in (("SMTP_USUARIO", True), ("SMTP_CLAVE", False),
+                           ("REDASH_URL", False), ("REDASH_API_KEY", False)):
+        print(f"  {nombre:18s}: {_tapado(_texto(nombre), correo)}")
+    print(f"  {'REDASH_QUERY_ID':18s}: {_tapado(_texto('REDASH_QUERY_ID'))}")
+    print(f"  {'destinatarios':18s}: {len(destinatarios())}")
     print()
 
 
@@ -135,8 +148,8 @@ def puede_enviar() -> bool:
     2. Un relay interno de la empresa que autoriza por IP y no pide clave; en ese
        caso basta el servidor y SMTP_SIN_LOGIN=1."""
     if _si("SMTP_SIN_LOGIN"):
-        return bool(os.environ.get("SMTP_HOST"))
-    return bool(os.environ.get("SMTP_USUARIO") and os.environ.get("SMTP_CLAVE"))
+        return bool(_texto("SMTP_HOST"))
+    return bool(_texto("SMTP_USUARIO") and _texto("SMTP_CLAVE"))
 
 
 # --- Qué hora revisar --------------------------------------------------------
@@ -501,11 +514,11 @@ def enviar(asunto_txt: str, html: str, texto: str, destinos: list[str]) -> None:
     """Manda el correo. Aguanta las tres formas que suele haber en una empresa:
     Gmail/Office con usuario y clave, un relay interno sin clave (SMTP_SIN_LOGIN),
     y un relay interno sin cifrado en el puerto 25 (SMTP_SIN_TLS)."""
-    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    host = _texto("SMTP_HOST", "smtp.gmail.com")
     puerto = _entero("SMTP_PORT", 587)
-    usuario = os.environ.get("SMTP_USUARIO", "")
-    clave = os.environ.get("SMTP_CLAVE", "")
-    remitente = os.environ.get("ALERTA_REMITENTE") or usuario
+    usuario = _texto("SMTP_USUARIO")
+    clave = _texto("SMTP_CLAVE")
+    remitente = _texto("ALERTA_REMITENTE", usuario)
     sin_login = _si("SMTP_SIN_LOGIN")
 
     msg = EmailMessage()
@@ -643,7 +656,9 @@ def main(argv=None) -> int:
         return 0
 
     forzado = bool(args.dia or args.hora is not None)
-    refrescar = os.environ.get("ALERTA_REFRESCAR_REDASH", "1") == "1" and not forzado
+    # Con _texto y no con os.environ.get: si alguien crea el secret vacío, el
+    # refresco se apagaría en silencio y la alerta quedaría mirando datos de ayer.
+    refrescar = _texto("ALERTA_REFRESCAR_REDASH", "1") == "1" and not forzado
 
     print("Trayendo los datos de Redash"
           + (" (forzando una corrida nueva)…" if refrescar else " (resultado en caché)…"))
