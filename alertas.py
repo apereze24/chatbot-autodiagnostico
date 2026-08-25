@@ -59,12 +59,18 @@ import redash
 load_dotenv()
 
 # A quién se le avisa si no se configura otra cosa.
+# OJO: este repositorio es PÚBLICO, así que esta lista es visible para
+# cualquiera. Para sacarla de la vista, se pone el secret ALERTA_DESTINATARIOS
+# en GitHub con los correos separados por coma: ese valor manda sobre esta lista
+# y no queda en el código. Ver ALERTA-CORREO.md.
 DESTINATARIOS_POR_DEFECTO = [
     "mbustamante@fibrazo.com",
     "busuga@fibrazo.com",
     "jgaravito@fibrazo.com",
     "jmantilla@fibrazo.com",
     "ammunoz@fibrazo.com",
+    "aperez@fibrazo.com",
+    "carbelaez@fibrazo.com",
 ]
 
 ARCHIVO_ESTADO = Path(__file__).with_name(".alerta_estado.json")

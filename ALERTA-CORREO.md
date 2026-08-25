@@ -17,14 +17,18 @@ diarios: por definición, la mitad de las horas supera la mediana.
 
 ## Quién recibe el aviso
 
-- mbustamante@fibrazo.com
-- busuga@fibrazo.com
-- jgaravito@fibrazo.com
-- jmantilla@fibrazo.com
-- ammunoz@fibrazo.com
+Siete personas: mbustamante, busuga, jgaravito, jmantilla, ammunoz, aperez y
+carbelaez (todos @fibrazo.com). La lista está en `alertas.py`.
 
-Para cambiar la lista no hay que tocar el código: se pone el secret
-`ALERTA_DESTINATARIOS` con los correos separados por coma.
+**Para cambiar la lista no hay que tocar el código:** se crea el secret
+`ALERTA_DESTINATARIOS` en GitHub con los correos separados por coma. Ese valor
+manda sobre la lista del código.
+
+> Vale la pena usar el secret por otra razón: **este repositorio es público**, así
+> que la lista que está en el código la puede ver cualquiera en internet. Correos
+> corporativos a la vista son material para spam y phishing dirigido. Poniéndolos
+> en el secret dejan de ser visibles, porque GitHub nunca muestra el contenido de
+> un secret.
 
 ---
 
