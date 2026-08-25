@@ -58,20 +58,12 @@ import redash
 
 load_dotenv()
 
-# A quién se le avisa si no se configura otra cosa.
-# OJO: este repositorio es PÚBLICO, así que esta lista es visible para
-# cualquiera. Para sacarla de la vista, se pone el secret ALERTA_DESTINATARIOS
-# en GitHub con los correos separados por coma: ese valor manda sobre esta lista
-# y no queda en el código. Ver ALERTA-CORREO.md.
-DESTINATARIOS_POR_DEFECTO = [
-    "mbustamante@fibrazo.com",
-    "busuga@fibrazo.com",
-    "jgaravito@fibrazo.com",
-    "jmantilla@fibrazo.com",
-    "ammunoz@fibrazo.com",
-    "aperez@fibrazo.com",
-    "carbelaez@fibrazo.com",
-]
+# A quién se le avisa. Deliberadamente VACÍA en el código: este repositorio es
+# público, y una lista de correos corporativos a la vista es material para spam y
+# phishing dirigido. La lista real vive en el secret ALERTA_DESTINATARIOS de
+# GitHub (correos separados por coma), que GitHub nunca muestra.
+# Si el secret falta, el programa NO envía a nadie en silencio: falla y lo dice.
+DESTINATARIOS_POR_DEFECTO: list[str] = []
 
 ARCHIVO_ESTADO = Path(__file__).with_name(".alerta_estado.json")
 ARCHIVO_PRUEBA = Path(__file__).with_name("alerta_prueba.html")
@@ -89,6 +81,20 @@ def destinatarios() -> list[str]:
     if not crudo:
         return list(DESTINATARIOS_POR_DEFECTO)
     return [c.strip() for c in crudo.replace(";", ",").split(",") if c.strip()]
+
+
+def hay_destinatarios(destinos: list[str]) -> bool:
+    """Comprueba que haya a quién escribirle, y si no, explica cómo arreglarlo.
+
+    Existe para que el peor caso posible no ocurra: que la alerta se crea enviada
+    cuando en realidad no le llegó a nadie."""
+    if destinos:
+        return True
+    print("NO HAY DESTINATARIOS, así que no envío nada.")
+    print("La lista vive en el secret ALERTA_DESTINATARIOS de GitHub, con los")
+    print("correos separados por coma. Revisa que exista y que el nombre esté")
+    print("escrito exacto: ALERTA_DESTINATARIOS.")
+    return False
 
 
 def _texto(nombre: str, defecto: str = "") -> str:
@@ -640,6 +646,8 @@ def main(argv=None) -> int:
 
     if args.probar_envio:
         asunto_txt, html, texto = correo_de_prueba()
+        if not hay_destinatarios(destinos):
+            return 1
         if not puede_enviar():
             print("No puedo enviar: falta SMTP_USUARIO o SMTP_CLAVE.")
             print("Revisa arriba cuál dice FALTA. Los nombres deben ser exactos: "
@@ -726,6 +734,10 @@ def main(argv=None) -> int:
         print(f"Vista previa: {ARCHIVO_PRUEBA}")
         print("\n" + texto)
         return 0
+
+    if not hay_destinatarios(destinos):
+        print(f"Asunto que se habría enviado: {asunto_txt}")
+        return 1
 
     if not puede_enviar():
         print("\nHay un pico, pero el correo NO está configurado "

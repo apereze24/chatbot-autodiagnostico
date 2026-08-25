@@ -17,18 +17,23 @@ diarios: por definición, la mitad de las horas supera la mediana.
 
 ## Quién recibe el aviso
 
-Siete personas: mbustamante, busuga, jgaravito, jmantilla, ammunoz, aperez y
-carbelaez (todos @fibrazo.com). La lista está en `alertas.py`.
+La lista **no está en el código**: vive en el secret `ALERTA_DESTINATARIOS` de
+GitHub, con los correos separados por coma. Es a propósito, porque este
+repositorio es público y una lista de correos corporativos a la vista es material
+para spam y phishing dirigido. GitHub nunca muestra el contenido de un secret.
 
-**Para cambiar la lista no hay que tocar el código:** se crea el secret
-`ALERTA_DESTINATARIOS` en GitHub con los correos separados por coma. Ese valor
-manda sobre la lista del código.
+Para cambiar quién recibe los avisos, se edita ese secret. Nada más.
 
-> Vale la pena usar el secret por otra razón: **este repositorio es público**, así
-> que la lista que está en el código la puede ver cualquiera en internet. Correos
-> corporativos a la vista son material para spam y phishing dirigido. Poniéndolos
-> en el secret dejan de ser visibles, porque GitHub nunca muestra el contenido de
-> un secret.
+Si el secret falta o queda vacío, el programa **no envía a nadie en silencio**:
+falla, lo dice en el registro y GitHub avisa de la falla. Eso es a propósito: el
+peor escenario posible sería creer que la alerta está funcionando cuando en
+realidad no le llega a nadie.
+
+## Que la alerta no se apague sola
+
+En los repositorios públicos GitHub desactiva las tareas programadas tras 60 días
+sin actividad, y la alerta dejaría de enviarse sin avisar. La rutina para
+evitarlo —un minuto cada 45 días— está en **`MANTENIMIENTO.md`**.
 
 ---
 

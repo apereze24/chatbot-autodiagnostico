@@ -144,9 +144,16 @@ Ciudad. Botón "Actualizar". Se detectan por nombre de columna automáticamente
   interna o un relay SMTP, y que entre tanto los 5 destinatarios marquen el
   remitente como "no es spam" — un remitente externo automático es candidato a
   filtro.
-- [ ] Vigilar: en repos públicos, GitHub desactiva los workflows programados si
-  el repo pasa 60 días sin actividad. Si la alerta deja de llegar, revisar eso
-  primero.
+- [~] **Rutina viva, no tarea cerrada:** el repo es público, así que GitHub
+  desactiva el workflow programado si pasa 60 días sin actividad, y la alerta
+  dejaría de enviarse EN SILENCIO. Mitigación: editar `MANTENIMIENTO.md` cada 45
+  días (una edición = actividad = reloj a cero). El instructivo y la bitácora
+  están en ese archivo. Se decidió mantener el repo público a pedido del usuario;
+  la alternativa definitiva era hacerlo privado (los privados están exentos de
+  esa regla), a costa de consumir ~720 de los 2.000 minutos gratis de Actions.
+- La lista de destinatarios NO va en el código (repo público): vive en el secret
+  `ALERTA_DESTINATARIOS`. Si falta, `alertas.py` falla en vez de enviar a nadie
+  en silencio.
 - [ ] Pendiente técnico: `use_container_width` está deprecado en Streamlit
   (reemplazar por `width="stretch"` / `width="content"` en `app.py`).
 
