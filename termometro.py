@@ -252,21 +252,20 @@ def _html_grafico_horas(conteo: pd.Series, habitual: pd.Series | None,
 
 
 def _estado_de_la_alerta() -> None:
-    """Dice si el correo de alerta está activo, para que no haya dudas de si el
-    equipo se está enterando o no. Se importa aquí adentro porque es lo único
-    que el dashboard necesita de `alertas.py`."""
-    try:
-        import alertas
-        cuantos = len(alertas.destinatarios())
-        if alertas.puede_enviar():
-            st.caption(f"📧 Alerta por correo **activa**: cuando una hora entra en "
-                       f"🔥 se avisa a {cuantos} personas del equipo.")
-        else:
-            st.caption("📧 Alerta por correo **sin configurar**: falta la clave del "
-                       "correo en los Secrets, así que por ahora el aviso solo se "
-                       "ve aquí.")
-    except Exception:
-        pass  # si algo falla, el dashboard no se rompe por una línea de estado
+    """Explica que el aviso también sale por correo.
+
+    OJO: aquí NO se puede comprobar si el envío está configurado. El correo lo
+    manda un proceso aparte en GitHub Actions, con sus propios secrets, y esta
+    pantalla corre en Streamlit Cloud, que no los ve ni los necesita. La primera
+    versión de esta línea consultaba las variables del proceso de la app y por
+    eso anunciaba "sin configurar" mientras la alerta llevaba días funcionando.
+    Si algún día hay que mostrar el estado real, tiene que venir de un dato que
+    el propio proceso de la alerta deje escrito, no de mirar el entorno."""
+    st.caption(
+        "📧 Cuando una hora entra en 🔥, el equipo de CX recibe un correo con "
+        "este mismo desglose. Lo envía un proceso que revisa cada hora por fuera "
+        "de esta pantalla, así que llega aunque nadie tenga la app abierta."
+    )
 
 
 # --- Dashboard ---------------------------------------------------------------
