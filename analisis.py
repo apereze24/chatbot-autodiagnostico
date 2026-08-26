@@ -306,12 +306,31 @@ def perfil_de_la_hora(df: pd.DataFrame, serie_fechas: pd.Series, dia: dt.date,
     return {"total": len(filas), "fallidos": fallidos, "repartos": repartos}
 
 
+FACTOR_SALTO = 3      # cuántas veces su peso habitual es "se disparó"
+PCT_SALTO = 0.5       # y con qué parte del peso mínimo basta en ese caso
+
+
 def crecio(item: dict, pct_minimo: float, casos_minimos: int) -> bool:
-    """¿Este valor pesa mucho Y además creció frente a lo habitual de esa hora?"""
+    """¿Este valor pesa lo suficiente Y además creció frente a lo habitual?
+
+    Hay dos formas de calificar, y la segunda se agregó por un caso real:
+      1. Ser mayoría de los casos (pct_minimo), la vía normal.
+      2. No ser mayoría pero haberse disparado: al menos la mitad de ese peso y
+         tres veces su parte habitual.
+
+    La segunda existe porque el 26 de agosto de 2026, a las 08:00, la causa
+    "fallaron los reintentos de ping" paso del 1% al 41% de los casos. Con solo
+    la regla de mayoría eso no se señalaba, y el correo terminaba diciendo que
+    "parece más demanda que una falla puntual" — una falsa tranquilidad, que es
+    peor que no decir nada."""
     hab = item["pct_habitual"]
-    return (hab is not None and item["casos"] >= casos_minimos
-            and item["pct"] >= pct_minimo
-            and item["pct"] >= max(hab * 1.5, hab + 15))
+    if hab is None or item["casos"] < casos_minimos:
+        return False
+    if item["pct"] < max(hab * 1.5, hab + 15):
+        return False  # no creció frente a lo habitual: no explica nada
+    if item["pct"] >= pct_minimo:
+        return True
+    return item["pct"] >= pct_minimo * PCT_SALTO and item["pct"] >= hab * FACTOR_SALTO
 
 
 def lo_que_cambio(perfil: dict) -> list[tuple[str, dict]]:
