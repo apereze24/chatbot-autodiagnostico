@@ -149,6 +149,16 @@ def diagnostico() -> None:
                            ("REDASH_URL", False), ("REDASH_API_KEY", False)):
         print(f"  {nombre:18s}: {_tapado(_texto(nombre), correo)}")
     print(f"  {'REDASH_QUERY_ID':18s}: {_tapado(_texto('REDASH_QUERY_ID'))}")
+    # Con qué dirección sale el correo. Se muestra completa (no es un secreto) y
+    # es importante verla: en los servicios de correo transaccional el usuario de
+    # conexión NO es la dirección del remitente, y si se deja igual el proveedor
+    # rechaza el envío por remitente no verificado.
+    remitente = _texto("ALERTA_REMITENTE")
+    if remitente:
+        print(f"  {'remitente (de:)':18s}: {remitente}")
+    else:
+        print(f"  {'remitente (de:)':18s}: {_tapado(_texto('SMTP_USUARIO'), True)}"
+              f"   (ALERTA_REMITENTE no está, se usa SMTP_USUARIO)")
     print(f"  {'destinatarios':18s}: {len(destinatarios())}")
     print()
 
