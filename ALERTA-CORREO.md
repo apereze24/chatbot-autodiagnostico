@@ -1,8 +1,53 @@
-# Cómo activar el correo de alerta
+# Cómo activar el aviso de alerta
 
 Guía para dejar funcionando el aviso al equipo de CX cuando los autodiagnósticos
 se disparan en una hora. No hace falta saber programar: es copiar y pegar valores
 en dos pantallas.
+
+Hay **dos canales** y son independientes: se puede usar uno, el otro, o los dos.
+Si están los dos y uno se cae, el otro sigue avisando.
+
+| Canal | Ventaja | Desventaja |
+|---|---|---|
+| **Google Chat** (recomendado) | No necesita credenciales de correo, remitente verificado ni DNS. No puede caer en spam. Todo queda dentro del Workspace de la empresa. | Hay que crear un espacio y un webhook. |
+| **Correo** | Llega a la bandeja de entrada de siempre. | Necesita un servidor de correo que permita envío automático. |
+
+> **Lección aprendida (agosto 2026):** se intentó primero con una cuenta personal
+> de Gmail y Google la bloqueó en cuatro días, con tres errores distintos
+> (`535 BadCredentials`, cuenta suspendida por política, `534 WebLoginRequired`).
+> **Una cuenta personal de Gmail no sirve para envío automático** y no hay
+> configuración que lo arregle. Para correo hace falta un relay interno de la
+> empresa o un servicio de correo transaccional (Brevo, SMTP2GO).
+
+---
+
+## Opción A: Google Chat (la más robusta)
+
+Un webhook es la vía que Google provee justamente para que un programa publique
+mensajes en un espacio. Es lo contrario de lo que nos bloquearon.
+
+1. Abre **Google Chat** y crea un espacio para el equipo, por ejemplo
+   *Alertas Autodiagnóstico*. Invita a quienes deban enterarse.
+2. Dentro del espacio, haz clic en el **nombre del espacio** (arriba) para abrir
+   el menú → **Apps e integraciones**.
+3. **Webhooks** → **Agregar webhook**.
+4. Nombre: `Termómetro de Autodiagnóstico`. (Si quieres, ponle un avatar con una
+   URL de imagen; es opcional.)
+5. **Guardar**. Google muestra una **URL** larga que empieza con
+   `https://chat.googleapis.com/...`. **Cópiala**: es la única vez que se ve
+   cómoda de copiar, aunque se puede volver a consultar en el mismo menú.
+6. En GitHub → **Settings** → **Secrets and variables** → **Actions** →
+   **New repository secret**:
+   - Name: `CHAT_WEBHOOK_URL`
+   - Secret: la URL que copiaste
+7. **Actions** → **Run workflow** → modo `revisar`. Si en ese momento hay un
+   pico, el mensaje aparece en el espacio. Para probar sin esperar un pico, usa
+   `--dia` y `--hora` de un día que sí tuvo pico (ver más abajo).
+
+Esa URL es una credencial: cualquiera que la tenga puede publicar en el espacio.
+Por eso va como secret y no en el código.
+
+---
 
 ## Qué hace, en una frase
 
@@ -36,6 +81,8 @@ sin actividad, y la alerta dejaría de enviarse sin avisar. La rutina para
 evitarlo —un minuto cada 45 días— está en **`MANTENIMIENTO.md`**.
 
 ---
+
+## Opción B: correo
 
 ## Paso 1: conseguir una contraseña de aplicación
 

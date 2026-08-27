@@ -136,14 +136,27 @@ Ciudad. Botón "Actualizar". Se detectan por nombre de columna automáticamente
 - [x] Filtros ajustados a los valores reales (directriz, estado, canal, ciudad, fecha).
 - [x] Termómetro de actividad por hora, con alerta de picos y explicación por
   causa/canal/ciudad, en su propia pestaña.
-- [x] Correo de alerta al equipo de CX, corriendo en GitHub Actions cada hora.
-  Secrets creados y **envío verificado desde Actions** (24-ago-2026) con
-  `modo: probar-envio`. Envía desde una cuenta de Gmail externa con contraseña
-  de aplicación, porque Workspace de Fibrazo tiene bloqueadas las contraseñas de
-  aplicación en las cuentas de la empresa. **Pendiente**: pedirle a TI una cuenta
-  interna o un relay SMTP, y que entre tanto los 5 destinatarios marquen el
-  remitente como "no es spam" — un remitente externo automático es candidato a
-  filtro.
+- [x] Alerta al equipo de CX corriendo en GitHub Actions cada hora. Detecta bien
+  (verificado con picos reales); el problema ha sido **por dónde avisar**.
+- [~] **Canal de aviso: sin resolver al 27-ago-2026.** Historia, para no repetirla:
+  Workspace de Fibrazo tiene bloqueadas las contraseñas de aplicación en las
+  cuentas de la empresa, así que se probó con un Gmail personal. Google lo tumbó
+  en cuatro días con tres errores distintos: `535 BadCredentials`, cuenta
+  suspendida por política ("bot que envía mensajes") y `534 WebLoginRequired`.
+  **Conclusión: una cuenta personal de Gmail NO sirve para envío automático; no
+  hay configuración que lo arregle.** En el camino se perdió una alerta real (el
+  pico del 26-ago 08:00, con los pings fallando al 41% cuando lo habitual es 1%).
+  - Solución implementada y lista: **webhook de Google Chat**
+    (`CHAT_WEBHOOK_URL`). Es la vía que Google provee para bots, no necesita
+    credenciales de correo ni DNS, no cae en spam y queda dentro del Workspace.
+    Falta que el usuario cree el espacio y el webhook.
+  - Los canales son independientes: basta que uno entregue. Si uno falla y el
+    otro entrega, la corrida NO falla (fallarla cada hora volvería ruido la
+    notificación de GitHub), pero el canal roto queda dicho en el registro.
+  - Si tiene que ser correo: relay interno de TI (lo correcto) o un servicio
+    transaccional tipo Brevo/SMTP2GO, que validan remitente por correo y no por
+    DNS. El código no necesita cambios: el envío ya lee servidor, puerto,
+    usuario, clave y remitente de la configuración.
 - [~] **Rutina viva, no tarea cerrada:** el repo es público, así que GitHub
   desactiva el workflow programado si pasa 60 días sin actividad, y la alerta
   dejaría de enviarse EN SILENCIO. Mitigación: editar `MANTENIMIENTO.md` cada 45

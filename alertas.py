@@ -51,6 +51,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 import pandas as pd
+import requests
 from dotenv import load_dotenv
 
 import analisis
@@ -353,8 +354,7 @@ def _fila_cambio(clave: str, items: list[dict], total: int) -> str:
 def cuerpo_html(r: dict) -> str:
     nivel = r["dia_nivel"]
     url = os.environ.get("ALERTA_URL_APP", "").strip()
-    veces_txt = (f"{r['veces']:.1f} veces lo habitual".replace(".0 ", " ")
-                 if r["veces"] else "por encima de lo habitual")
+    veces_txt = veces_en_palabras(r["veces"])
 
     filas_cambio = "".join(
         _fila_cambio(clave, r["perfil"]["repartos"].get(clave, []), r["casos"])
@@ -529,6 +529,87 @@ def cuerpo_texto(r: dict) -> str:
         "autodiagnosticos que suele tener esa misma hora.",
     ]
     return "\n".join(lineas)
+
+
+# --- Envío por Google Chat ---------------------------------------------------
+# Se agregó después de que Google bloqueara tres veces el envío por Gmail: una
+# cuenta personal no se puede usar para envío automático, y no hay configuración
+# que lo arregle. Un webhook de Chat es lo contrario: es la vía que Google
+# provee justamente para que un programa publique mensajes. No necesita
+# credenciales de correo, ni remitente verificado, ni DNS, no puede caer en
+# spam, y todo queda dentro del Workspace de la empresa.
+def hay_chat() -> bool:
+    """Si hay un espacio de Chat configurado. Los webhooks reales de Google son
+    https; se acepta http para poder probar contra un servidor local."""
+    return _texto("CHAT_WEBHOOK_URL").startswith("http")
+
+
+def veces_en_palabras(veces: float | None) -> str:
+    """«3,8 veces lo habitual». Con coma decimal, y sin el ,0 cuando es redondo."""
+    if not veces:
+        return "por encima de lo habitual"
+    numero = f"{veces:.1f}".rstrip("0").rstrip(".").replace(".", ",")
+    return f"{numero} veces lo habitual"
+
+
+def _umbrales(clave: str) -> tuple[float, int]:
+    """Cuánto tiene que pesar algo para señalarlo, según la dimensión.
+    A una causa se le exige mayoría; a una ciudad o un canal, concentración."""
+    if clave == "causa":
+        return analisis.PCT_DOMINANTE, analisis.MINIMO_CASOS_CAUSA
+    return analisis.PCT_CONCENTRADO, analisis.MINIMO_CASOS_DIM
+
+
+def mensaje_chat(r: dict) -> str:
+    """El aviso en el formato de Google Chat (*negrita*, viñetas, enlaces)."""
+    veces = veces_en_palabras(r["veces"])
+    cabeza = (f"🔥 *Sigue el pico · {r['posicion']}ª hora seguida*"
+              if r["posicion"] > 1 else "🔥 *Pico de autodiagnósticos*")
+
+    lineas = [
+        cabeza,
+        f"*{r['hora']:02d}:00 a {r['hora']:02d}:59* · "
+        f"{analisis.fecha_larga(r['dia'])}",
+        "",
+        f"*{r['casos']} autodiagnósticos* en esa hora — {veces} "
+        f"({r['habitual']:.0f} en un día normal a esa hora).",
+        "",
+        interpretacion(r),
+        "",
+        "*Qué está pasando*",
+    ]
+    for clave in ("causa", "ciudad", "canal"):
+        items = r["perfil"]["repartos"].get(clave, [])
+        if not items:
+            continue
+        it = items[0]
+        valor = (analisis.en_palabras(it["valor"]) if clave == "causa"
+                 else analisis.bonito(it["valor"]))
+        hab = ("no aparecía a esta hora" if it["pct_habitual"] is None
+               else f"habitual {it['pct_habitual']:.0f}%")
+        marca = " ⬆️" if analisis.crecio(it, *_umbrales(clave)) else ""
+        lineas.append(f"• {ETIQUETAS[clave]}: *{valor}* — {it['pct']:.0f}% "
+                      f"de los casos ({hab}){marca}")
+
+    lineas += [
+        "",
+        "*El día hasta ahora*",
+        f"{r['dia_total']} autodiagnósticos hasta las {r['hora']:02d}:59, cuando "
+        f"un día normal llevaría {r['dia_habitual']:.0f} "
+        f"({r['dia_nivel']['desvio'] * 100:+.0f}%).",
+        f"Horas en alerta hoy: "
+        f"{', '.join(f'{h:02d}:00' for h in r['dia_picos'])}.",
+    ]
+    url = _texto("ALERTA_URL_APP")
+    if url:
+        lineas += ["", f"<{url}|Ver el detalle en el termómetro>"]
+    return "\n".join(lineas)
+
+
+def enviar_chat(texto: str) -> None:
+    """Publica un mensaje en el espacio de Chat. Lanza excepción si falla."""
+    r = requests.post(_texto("CHAT_WEBHOOK_URL"), json={"text": texto}, timeout=30)
+    r.raise_for_status()
 
 
 # --- Envío -------------------------------------------------------------------
@@ -738,42 +819,77 @@ def main(argv=None) -> int:
 
     if args.prueba:
         ARCHIVO_PRUEBA.write_text(html, encoding="utf-8")
-        print("\n--- MODO PRUEBA: no se envió ningún correo ---")
+        print("\n--- MODO PRUEBA: no se envió ni publicó nada ---")
         print(f"Asunto: {asunto_txt}")
-        print(f"Iría a: {', '.join(destinos)}")
-        print(f"Vista previa: {ARCHIVO_PRUEBA}")
+        print(f"Iría a: {', '.join(destinos) or '(sin destinatarios)'}")
+        print(f"Vista previa del correo: {ARCHIVO_PRUEBA}")
         print("\n" + texto)
+        print("\n--- Y así se vería en Google Chat ---\n")
+        print(mensaje_chat(r))
         return 0
 
-    if not hay_destinatarios(destinos):
+    # --- Avisar por todos los canales configurados ---
+    # Los canales son independientes a propósito: si uno se cae, el otro sigue
+    # avisando. Basta con que UNO entregue para que el equipo se haya enterado,
+    # que es lo único que de verdad importa.
+    resultados: dict[str, bool] = {}
+
+    if hay_chat():
+        try:
+            enviar_chat(mensaje_chat(r))
+            resultados["Chat"] = True
+            print("Publicado en el espacio de Google Chat.")
+        except Exception as e:
+            resultados["Chat"] = False
+            print(f"ERROR publicando en Google Chat: {type(e).__name__}: {e}")
+
+    if puede_enviar():
+        if not hay_destinatarios(destinos):
+            resultados["correo"] = False
+        else:
+            try:
+                enviar(asunto_txt, html, texto, destinos)
+                resultados["correo"] = True
+                print(f"Correo enviado a {len(destinos)} personas: "
+                      f"{', '.join(destinos)}")
+            except Exception as e:
+                resultados["correo"] = False
+                print(f"ERROR enviando el correo: {type(e).__name__}: {e}")
+                print("Causas más comunes: la clave no es una contraseña de "
+                      "aplicación, la cuenta no permite envío automático, o el "
+                      "servidor y el puerto no corresponden al proveedor.")
+
+    if not resultados:
+        print("\nHay un pico, pero NO hay ningún canal configurado: ni Chat "
+              "(CHAT_WEBHOOK_URL) ni correo (SMTP_USUARIO y SMTP_CLAVE).")
         print(f"Asunto que se habría enviado: {asunto_txt}")
         return 1
 
-    if not puede_enviar():
-        print("\nHay un pico, pero el correo NO está configurado "
-              "(faltan SMTP_USUARIO y SMTP_CLAVE), así que no envío nada.")
-        print(f"Asunto que se habría enviado: {asunto_txt}")
+    entregaron = [c for c, ok in resultados.items() if ok]
+    fallaron = [c for c, ok in resultados.items() if not ok]
+
+    if entregaron:
+        estado_guardar(dia, hora)
+        if fallaron:
+            # El aviso llegó, así que la corrida NO falla: fallarla cada hora
+            # convertiría la notificación de GitHub en ruido. Pero el canal roto
+            # queda dicho en el registro.
+            print(f"\nAVISO: el pico se avisó por {', '.join(entregaron)}, pero "
+                  f"{', '.join(fallaron)} falló. Conviene revisar ese canal.")
         return 0
 
-    try:
-        enviar(asunto_txt, html, texto, destinos)
-    except Exception as e:
-        # Se grita con todas las letras: la corrida falla, GitHub avisa al dueño
-        # del repositorio, y quien lea ese aviso tiene que entender de inmediato
-        # que se perdió una alerta real, no que "hubo un error técnico".
-        print(f"ERROR enviando el correo: {type(e).__name__}: {e}")
-        print()
-        print("=" * 70)
-        print(f"OJO: EL PICO DE LAS {hora:02d}:00 NO SE AVISÓ A NADIE.")
-        print(f"     {r['casos']} autodiagnósticos contra {r['habitual']:.0f} "
-              f"habituales. Nadie del equipo lo sabe.")
-        print("     Revisa el canal de envío y, si hace falta, avisa a mano.")
-        print("=" * 70)
-        return 1
-
-    print(f"Correo enviado a {len(destinos)} personas: {', '.join(destinos)}")
-    estado_guardar(dia, hora)
-    return 0
+    # Ningún canal entregó: se grita con todas las letras, porque la corrida
+    # falla y GitHub le escribe al dueño del repositorio. Quien lea ese aviso
+    # tiene que entender de inmediato que se perdió una alerta real.
+    print()
+    print("=" * 70)
+    print(f"OJO: EL PICO DE LAS {hora:02d}:00 NO SE AVISÓ A NADIE.")
+    print(f"     {r['casos']} autodiagnósticos contra {r['habitual']:.0f} "
+          f"habituales. Nadie del equipo lo sabe.")
+    print(f"     Canales que fallaron: {', '.join(fallaron)}.")
+    print("     Revísalos y, si hace falta, avisa a mano mientras se arregla.")
+    print("=" * 70)
+    return 1
 
 
 if __name__ == "__main__":

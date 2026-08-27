@@ -78,8 +78,12 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USUARIO: ${{ secrets.SMTP_USUARIO }}
           SMTP_CLAVE: ${{ secrets.SMTP_CLAVE }}
+          ALERTA_REMITENTE: ${{ secrets.ALERTA_REMITENTE }}
           ALERTA_DESTINATARIOS: ${{ secrets.ALERTA_DESTINATARIOS }}
           ALERTA_URL_APP: ${{ secrets.ALERTA_URL_APP }}
+          # Espacio de Google Chat donde publicar el aviso. Es un canal aparte
+          # del correo: si uno falla, el otro sigue avisando.
+          CHAT_WEBHOOK_URL: ${{ secrets.CHAT_WEBHOOK_URL }}
           # Lo que se eligió al lanzarla a mano. En las corridas programadas
           # llegan vacíos, así que cae en el modo normal.
           # Van por env y no dentro del run para que un texto escrito a mano no
