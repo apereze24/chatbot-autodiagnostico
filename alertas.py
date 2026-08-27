@@ -758,7 +758,17 @@ def main(argv=None) -> int:
     try:
         enviar(asunto_txt, html, texto, destinos)
     except Exception as e:
-        print(f"ERROR enviando el correo: {e}")
+        # Se grita con todas las letras: la corrida falla, GitHub avisa al dueño
+        # del repositorio, y quien lea ese aviso tiene que entender de inmediato
+        # que se perdió una alerta real, no que "hubo un error técnico".
+        print(f"ERROR enviando el correo: {type(e).__name__}: {e}")
+        print()
+        print("=" * 70)
+        print(f"OJO: EL PICO DE LAS {hora:02d}:00 NO SE AVISÓ A NADIE.")
+        print(f"     {r['casos']} autodiagnósticos contra {r['habitual']:.0f} "
+              f"habituales. Nadie del equipo lo sabe.")
+        print("     Revisa el canal de envío y, si hace falta, avisa a mano.")
+        print("=" * 70)
         return 1
 
     print(f"Correo enviado a {len(destinos)} personas: {', '.join(destinos)}")
