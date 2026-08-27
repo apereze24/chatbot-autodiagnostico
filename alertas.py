@@ -139,6 +139,23 @@ def diagnostico() -> None:
     Muestra el valor QUE SE VA A USAR, no el que llegó: si un secret viene vacío
     y se aplica el valor por defecto, hay que verlo, porque confundir esas dos
     cosas ya costó una falla difícil de leer."""
+    # Lo primero: por dónde va a salir el aviso. Es lo que uno quiere saber al
+    # abrir el registro, y antes no aparecía: se podía revisar una corrida
+    # entera sin enterarse de si el canal de Chat estaba armado o no.
+    print("Canales de aviso:")
+    print(f"  {'Google Chat':18s}: "
+          + ("configurado" if hay_chat() else "sin configurar (falta CHAT_WEBHOOK_URL)"))
+    if puede_enviar():
+        cuantos = len(destinatarios())
+        print(f"  {'Correo':18s}: configurado, "
+              + (f"{cuantos} destinatarios" if cuantos
+                 else "PERO SIN DESTINATARIOS (falta ALERTA_DESTINATARIOS)"))
+    else:
+        print(f"  {'Correo':18s}: sin configurar")
+    if not hay_chat() and not puede_enviar():
+        print("  >>> No hay ningún canal: si aparece un pico, NO se podrá avisar.")
+    print()
+
     print("Configuración detectada:")
     # El servidor y el puerto no son secretos: se muestran completos porque un
     # error de dedo ahí es casi imposible de ver de otro modo.
@@ -646,6 +663,30 @@ def enviar(asunto_txt: str, html: str, texto: str, destinos: list[str]) -> None:
         s.send_message(msg)
 
 
+def mensaje_chat_de_prueba() -> str:
+    """La versión corta, para comprobar que el webhook del espacio funciona."""
+    cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
+    return "\n".join([
+        "✅ *La alerta quedó configurada*",
+        "",
+        "Si ves este mensaje, el aviso por Chat funciona.",
+        "",
+        "*Este es el único mensaje que llega sin que esté pasando nada.* De aquí "
+        "en adelante solo se publica cuando hay algo que mirar: cuando en una "
+        "hora se ejecuten el doble o más de los autodiagnósticos que suele haber "
+        f"a esa misma hora (mediana de los últimos {analisis.DIAS_BASE} días) y "
+        "además se salga de su rango normal.",
+        "",
+        "Para dar una idea de cada cuánto: mirando los últimos 90 días habrían "
+        "salido 57 avisos, y en 6 de cada 10 días no habría llegado ninguno.",
+        "",
+        "Cada aviso trae cuántos fueron, qué falla predominó, *en qué ciudad* se "
+        "concentró y por qué canal entraron.",
+        "",
+        f"Si un pico se alarga, el aviso se repite cada {cada} horas, no cada hora.",
+    ])
+
+
 def correo_de_prueba() -> tuple[str, str, str]:
     """Un correo corto para comprobar que las credenciales quedaron bien.
 
@@ -736,29 +777,45 @@ def main(argv=None) -> int:
                  if c.strip()] if args.solo_a else destinatarios())
 
     if args.probar_envio:
-        asunto_txt, html, texto = correo_de_prueba()
-        if not hay_destinatarios(destinos):
+        # Prueba TODOS los canales configurados, no solo el correo: si no, no
+        # habría forma de comprobar el webhook de Chat sin esperar un pico real.
+        resultados: dict[str, bool] = {}
+
+        if hay_chat():
+            try:
+                enviar_chat(mensaje_chat_de_prueba())
+                resultados["Chat"] = True
+                print("Mensaje de prueba publicado en el espacio de Google Chat.")
+            except Exception as e:
+                resultados["Chat"] = False
+                print(f"ERROR publicando en Google Chat: {type(e).__name__}: {e}")
+                print("Revisa que CHAT_WEBHOOK_URL sea la URL completa que dio "
+                      "Google, sin recortar.")
+
+        if puede_enviar() and hay_destinatarios(destinos):
+            asunto_txt, html, texto = correo_de_prueba()
+            try:
+                enviar(asunto_txt, html, texto, destinos)
+                resultados["correo"] = True
+                print(f"Correo de prueba enviado a: {', '.join(destinos)}")
+            except Exception as e:
+                resultados["correo"] = False
+                print(f"ERROR enviando el correo de prueba: "
+                      f"{type(e).__name__}: {e}")
+                print("Las causas más comunes, en orden:")
+                print("  1. La cuenta no permite envío automático. Una cuenta "
+                      "personal de Gmail NO sirve para esto.")
+                print("  2. La clave no es una contraseña de aplicación.")
+                print("  3. El servidor y el puerto no son los del proveedor.")
+                print("  4. SMTP_USUARIO no es el usuario que dio el proveedor.")
+        elif puede_enviar():
+            resultados["correo"] = False
+
+        if not resultados:
+            print("No hay ningún canal configurado: ni Chat (CHAT_WEBHOOK_URL) "
+                  "ni correo (SMTP_USUARIO y SMTP_CLAVE).")
             return 1
-        if not puede_enviar():
-            print("No puedo enviar: falta SMTP_USUARIO o SMTP_CLAVE.")
-            print("Revisa arriba cuál dice FALTA. Los nombres deben ser exactos: "
-                  "SMTP_USUARIO y SMTP_CLAVE, en mayúsculas y con guion bajo.")
-            return 1
-        try:
-            enviar(asunto_txt, html, texto, destinos)
-        except Exception as e:
-            print(f"ERROR enviando el correo de prueba: {type(e).__name__}: {e}")
-            print()
-            print("Las causas más comunes, en orden:")
-            print("  1. La clave no es una CONTRASEÑA DE APLICACIÓN de 16 letras, "
-                  "sino la contraseña normal de la cuenta.")
-            print("  2. La contraseña de aplicación quedó pegada con espacios. "
-                  "Debe ir seguida, sin espacios.")
-            print("  3. La cuenta no tiene la verificación en dos pasos activada.")
-            print("  4. SMTP_USUARIO no es el correo completo.")
-            return 1
-        print(f"Correo de prueba enviado a: {', '.join(destinos)}")
-        return 0
+        return 0 if any(resultados.values()) else 1
 
     forzado = bool(args.dia or args.hora is not None)
     # Con _texto y no con os.environ.get: si alguien crea el secret vacío, el
