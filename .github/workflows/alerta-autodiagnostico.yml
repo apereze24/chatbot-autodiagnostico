@@ -34,6 +34,14 @@ on:
         description: "Solo para probar-envio: a qué correo enviarlo. Si se deja vacío, va a TODO el equipo."
         required: false
         type: string
+      dia:
+        description: "Opcional: revisar un día concreto, AAAA-MM-DD. Sirve para reproducir un pico conocido."
+        required: false
+        type: string
+      hora:
+        description: "Opcional: revisar una hora concreta, 0 a 23. Va junto con el día."
+        required: false
+        type: string
 
 # Si una corrida se demora, que la siguiente espere en vez de solaparse.
 concurrency:
@@ -90,6 +98,8 @@ jobs:
           # pueda inyectar comandos en el script.
           MODO: ${{ inputs.modo }}
           SOLO_A: ${{ inputs.solo_a }}
+          DIA: ${{ inputs.dia }}
+          HORA: ${{ inputs.hora }}
         run: |
           if [ "$MODO" = "probar-envio" ]; then
             if [ -n "$SOLO_A" ]; then
@@ -97,6 +107,19 @@ jobs:
             else
               python alertas.py --probar-envio
             fi
+            exit $?
+          fi
+
+          # Si se pide un día u hora concretos, se revisa solo eso. Sirve para
+          # reproducir un pico conocido y ver el aviso de verdad en el canal.
+          # Los valores se pasan como argumentos entrecomillados, nunca pegados
+          # dentro del comando, para que un texto escrito a mano no pueda
+          # inyectar ordenes.
+          set --
+          [ -n "$DIA" ] && set -- "$@" --dia "$DIA"
+          [ -n "$HORA" ] && set -- "$@" --hora "$HORA"
+          if [ "$#" -gt 0 ]; then
+            python alertas.py "$@" --ignorar-estado
           else
             python alertas.py
           fi

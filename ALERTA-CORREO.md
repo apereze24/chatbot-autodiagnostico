@@ -176,6 +176,18 @@ Opcionales, solo si se necesitan:
 
 De ahí en adelante corre sola cada hora.
 
+### Ver un aviso de verdad, sin esperar un pico
+
+El modo `probar-envio` manda un mensaje de confirmación, pero no un aviso real.
+Para ver cómo llega una alerta de verdad, se puede reproducir un pico conocido:
+en **Run workflow**, además del modo `revisar`, se llenan los campos **dia**
+(AAAA-MM-DD) y **hora** (0 a 23). Eso revisa solo esa hora y avisa por los
+canales configurados, igual que en vivo.
+
+Sirve también para depurar: si algún día un pico no llegó, se reproduce esa hora
+y se ve en el registro exactamente qué pasó. Reproducir una hora **no altera** el
+seguimiento normal: el puntero de "hasta dónde revisé" no se mueve.
+
 ---
 
 ## Preguntas que suelen salir
