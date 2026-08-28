@@ -1,0 +1,57 @@
+# Abre la app cada pocas horas para que Streamlit no la ponga a dormir.
+#
+# Streamlit Community Cloud duerme las apps que nadie visita, y entonces el
+# primero que entra se encuentra con la pantalla de "reactivar" y tiene que
+# esperar. Esto la mantiene arriba.
+#
+# OJO: no sirve un simple "ping" HTTP. Una petición normal devuelve la cáscara
+# de la página con código 200 sin arrancar el programa de Python, así que la app
+# sigue dormida. Hace falta abrirla con un navegador de verdad, y por eso este
+# trabajo instala Chromium.
+#
+# Esto es INDEPENDIENTE de la alerta: si falla, la alerta de picos sigue
+# funcionando igual. Si algún día molesta, se puede borrar este archivo sin
+# tocar nada más.
+#
+# Necesita el secret ALERTA_URL_APP con la dirección de la app.
+
+name: Mantener despierta la app
+
+on:
+  schedule:
+    # Cada 6 horas. En hora de Colombia (UTC-5): 7 p.m., 1 a.m., 7 a.m. y 1 p.m.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: mantener-app-despierta
+  cancel-in-progress: false
+
+jobs:
+  despertar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Traer el código
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar el navegador
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Abrir la app
+        env:
+          URL: ${{ secrets.ALERTA_URL_APP }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "Falta el secret ALERTA_URL_APP con la dirección de la app."
+            exit 1
+          fi
+          python mantener_despierta.py "$URL"
