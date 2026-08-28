@@ -1,9 +1,9 @@
 """
 Alerta por correo cuando los autodiagnósticos se disparan en una hora.
 
-Revisa la última hora COMPLETA de datos y, si se salió de lo normal, manda un
-correo al equipo con el desglose: cuántos fueron, qué falló, en qué ciudad y por
-qué canal entraron.
+Revisa cada hora completa de datos que quede pendiente y, si alguna se salió de
+lo normal, avisa al equipo con el desglose: cuántos fueron, qué falló, en qué
+ciudad y por qué canal entraron. Avisa por Google Chat y/o por correo.
 
 Usa la MISMA regla que el termómetro de la app (`analisis.py`), así que la
 pantalla y el correo nunca dicen cosas distintas.
@@ -193,15 +193,52 @@ def puede_enviar() -> bool:
 
 
 # --- Qué hora revisar --------------------------------------------------------
-def ultima_hora_completa(serie_fechas: pd.Series) -> tuple[dt.date, int] | None:
+def ultima_hora_completa(serie_fechas: pd.Series) -> pd.Timestamp | None:
     """La última hora que ya terminó y de la que hay datos completos.
 
     Si el último dato es de las 08:20, la última hora completa es la de las 07:00:
     la de las 08:00 todavía está a medias y avisaría con la mitad de los casos."""
     if serie_fechas.empty:
         return None
-    fin = serie_fechas.max().floor("h") - pd.Timedelta(hours=1)
-    return fin.date(), int(fin.hour)
+    return serie_fechas.max().floor("h") - pd.Timedelta(hours=1)
+
+
+def horas_pendientes(serie_fechas: pd.Series, estado: dict) -> list[pd.Timestamp]:
+    """Todas las horas completas que faltan por revisar, de la más vieja a la más nueva.
+
+    Antes se revisaba SOLO la última hora completa, y eso dejaba un hueco por el
+    que se cayó una alerta real (el pico del 28-ago-2026 a las 06:00): el atraso
+    con que llegan los datos de Redash varía entre corridas, así que la corrida de
+    las 07:10 miró las 05:00 y la de las 08:10 ya miraba las 07:00. Las 06:00 no
+    las revisó nadie. Lo mismo pasaría si GitHub retrasa o se salta una corrida,
+    que es algo que sí ocurre.
+
+    Ahora se avanza sobre un puntero guardado, así que ninguna hora se pierde y
+    una corrida se pone al día con las que quedaron atrás."""
+    fin = ultima_hora_completa(serie_fechas)
+    if fin is None:
+        return []
+
+    # Nunca mirar más atrás que la ventana de atraso aceptable: si algo quedó
+    # sin revisar por más tiempo que eso, avisarlo ahora sería avisar de algo
+    # ya pasado.
+    ventana = max(1, _entero("ALERTA_MAX_ATRASO_HORAS", 6))
+    mas_viejo = fin - pd.Timedelta(hours=ventana - 1)
+
+    inicio = None
+    guardado = estado.get("ultima_hora_revisada")
+    if guardado:
+        try:
+            inicio = pd.Timestamp(guardado) + pd.Timedelta(hours=1)
+        except Exception:
+            inicio = None
+    if inicio is None or inicio > fin:
+        # Sin puntero (primera corrida, o caché perdida): solo la última hora.
+        # Así una instalación nueva no dispara una ráfaga de avisos viejos.
+        inicio = fin
+    inicio = max(inicio, mas_viejo)
+
+    return list(pd.date_range(inicio, fin, freq="h"))
 
 
 def atraso_del_dato(serie_fechas: pd.Series) -> dt.timedelta:
@@ -237,10 +274,11 @@ def estado_leer() -> dict:
         return {}
 
 
-def estado_guardar(dia: dt.date, hora: int) -> None:
+def estado_guardar(hasta: pd.Timestamp) -> None:
+    """Recuerda hasta qué hora se revisó, para que la próxima corrida siga desde ahí."""
     try:
         ARCHIVO_ESTADO.write_text(
-            json.dumps({"ultima_hora_avisada": f"{dia.isoformat()}T{hora:02d}"}),
+            json.dumps({"ultima_hora_revisada": hasta.isoformat()}),
             encoding="utf-8")
     except Exception as e:  # no es crítico: en el peor caso se repite un aviso
         print(f"  (no pude guardar el estado: {e})")
@@ -834,41 +872,68 @@ def main(argv=None) -> int:
     print(f"Último autodiagnóstico registrado: {serie.max():%Y-%m-%d %H:%M} "
           f"(hace {atraso})")
 
-    if args.dia or args.hora is not None:
+    estado = {} if args.ignorar_estado else estado_leer()
+
+    if forzado:
         dia = (dt.date.fromisoformat(args.dia) if args.dia else serie.max().date())
         hora = args.hora if args.hora is not None else int(serie.max().hour)
+        pendientes = [pd.Timestamp(dia) + pd.Timedelta(hours=hora)]
     else:
         tope = _entero("ALERTA_MAX_ATRASO_HORAS", 6)
         if atraso > dt.timedelta(hours=tope):
             print(f"El dato viene con más de {tope} horas de atraso: no aviso, "
                   f"porque sería una alerta sobre algo ya pasado.")
             return 0
-        objetivo = ultima_hora_completa(serie)
-        if objetivo is None:
-            return 0
-        dia, hora = objetivo
+        pendientes = horas_pendientes(serie, estado)
 
-    print(f"Revisando {dia} a las {hora:02d}:00…")
-
-    estado = estado_leer()
-    marca = f"{dia.isoformat()}T{hora:02d}"
-    if not args.ignorar_estado and estado.get("ultima_hora_avisada") == marca:
-        print("Esa hora ya se había avisado. No repito.")
+    if not pendientes:
+        print("No hay horas nuevas por revisar.")
         return 0
+
+    print("Horas por revisar: "
+          + ", ".join(t.strftime("%d/%m %H:00") for t in pendientes))
+
+    hubo_fallo = False
+    ultima_ok = None
+    for momento in pendientes:
+        print()
+        resultado = revisar_hora(df, momento.date(), int(momento.hour),
+                                 destinos, args)
+        if resultado == "fallo":
+            # No se avanza el puntero: así la próxima corrida vuelve a intentar
+            # esta hora en vez de dejar el aviso perdido.
+            hubo_fallo = True
+            break
+        ultima_ok = momento
+
+    if ultima_ok is not None and not forzado and not args.prueba:
+        estado_guardar(ultima_ok)
+
+    return 1 if hubo_fallo else 0
+
+
+def revisar_hora(df: pd.DataFrame, dia: dt.date, hora: int,
+                 destinos: list[str], args) -> str:
+    """Revisa UNA hora y avisa si hace falta.
+
+    Devuelve "normal" si no había nada que avisar o no tocaba, "avisado" si el
+    aviso salió por algún canal, y "fallo" si había que avisar y ningún canal
+    pudo entregarlo."""
+    print(f"Revisando {dia} a las {hora:02d}:00…")
 
     r = armar_resumen(df, dia, hora)
     if r is None:
-        print("Esa hora está dentro de lo normal. No hay nada que avisar.")
-        return 0
+        print("  Dentro de lo normal. No hay nada que avisar.")
+        return "normal"
 
-    print(f"PICO: {r['casos']} casos vs {r['habitual']:.0f} habituales "
+    print(f"  PICO: {r['casos']} casos vs {r['habitual']:.0f} habituales "
           f"({r['veces']:.1f}×) · hora {r['posicion']}ª de la racha")
 
     if not toca_avisar(r["posicion"]):
         cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
-        print(f"El pico ya se avisó y sigue; el próximo recordatorio va cada "
+        print(f"  El pico ya se avisó y sigue; el próximo recordatorio va cada "
               f"{cada} horas. No envío.")
-        return 0
+        return "normal"
 
     asunto_txt = asunto(r)
     html = cuerpo_html(r)
@@ -883,7 +948,7 @@ def main(argv=None) -> int:
         print("\n" + texto)
         print("\n--- Y así se vería en Google Chat ---\n")
         print(mensaje_chat(r))
-        return 0
+        return "normal"
 
     # --- Avisar por todos los canales configurados ---
     # Los canales son independientes a propósito: si uno se cae, el otro sigue
@@ -920,13 +985,12 @@ def main(argv=None) -> int:
         print("\nHay un pico, pero NO hay ningún canal configurado: ni Chat "
               "(CHAT_WEBHOOK_URL) ni correo (SMTP_USUARIO y SMTP_CLAVE).")
         print(f"Asunto que se habría enviado: {asunto_txt}")
-        return 1
+        return "fallo"
 
     entregaron = [c for c, ok in resultados.items() if ok]
     fallaron = [c for c, ok in resultados.items() if not ok]
 
     if entregaron:
-        estado_guardar(dia, hora)
         if fallaron:
             # El aviso llegó, así que la corrida NO falla: fallarla cada hora
             # convertiría la notificación de GitHub en ruido. Pero el canal roto
@@ -946,7 +1010,7 @@ def main(argv=None) -> int:
     print(f"     Canales que fallaron: {', '.join(fallaron)}.")
     print("     Revísalos y, si hace falta, avisa a mano mientras se arregla.")
     print("=" * 70)
-    return 1
+    return "fallo"
 
 
 if __name__ == "__main__":
