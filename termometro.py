@@ -251,6 +251,31 @@ def _html_grafico_horas(conteo: pd.Series, habitual: pd.Series | None,
     return "".join(filas)
 
 
+def _html_ciudades(datos: list[tuple[str, int]], total: int) -> str:
+    """Barra horizontal por ciudad: mismo estilo del gráfico por hora, para que
+    se lea como parte del mismo tablero y no como un widget aparte."""
+    if not datos:
+        return ""
+    maximo = max(casos for _, casos in datos)
+    filas = [
+        "<div class='td-rej' style='grid-template-columns:130px 1fr 90px'>"
+        "<span class='td-hora' style='text-align:left'>Ciudad</span>"
+        "<span></span><span style='text-align:right'>Casos</span></div>"
+    ]
+    for ciudad, casos in datos:
+        ancho = casos / maximo * 100 if maximo else 0
+        pct = casos / total * 100 if total else 0
+        filas.append(
+            f"<div class='td-rej td-fila' style='grid-template-columns:130px 1fr 90px' "
+            f"title='{ciudad} — {casos} autodiagnósticos ({pct:.0f}% del día)'>"
+            f"<span class='td-hora' style='text-align:left'>{ciudad}</span>"
+            f"<span class='td-pista'><span class='td-barra' "
+            f"style='width:{max(ancho, 1.5):.1f}%;background:{RAMPA[2]}'></span></span>"
+            f"<span class='td-val'>{casos} · {pct:.0f}%</span></div>"
+        )
+    return "".join(filas)
+
+
 def _estado_de_la_alerta() -> None:
     """Explica que el aviso también sale por correo.
 
@@ -407,6 +432,22 @@ def render(df: pd.DataFrame, col_fecha: str | None, col_causa: str | None = None
                                 f"{habitual[h]:.0f} habituales.")
 
         _estado_de_la_alerta()
+
+    st.divider()
+
+    # --- Autodiagnósticos por ciudad, del mismo día elegido arriba ---
+    st.markdown("##### Autodiagnósticos por ciudad")
+    st.caption(f"Reparto por ciudad el {fecha_larga(dia)}, con los mismos filtros "
+               "de la izquierda (menos el de fecha).")
+    if col_ciudad and col_ciudad in df.columns:
+        del_dia = df.loc[fechas_todas.dt.date == dia]
+        conteo_ciudad = del_dia[col_ciudad].fillna("Sin ciudad").value_counts()
+        st.markdown(
+            _CSS + "<div class='td'>"
+            + _html_ciudades(list(conteo_ciudad.items()), int(conteo_ciudad.sum()))
+            + "</div>", unsafe_allow_html=True)
+    else:
+        st.info("No hay columna de ciudad disponible en los datos para este desglose.")
 
     # --- Tabla (misma información, para quien prefiera leerla en números) ---
     hora_corte, hay_base, dias_base = a["hora_corte"], a["hay_base"], a["dias_base"]
