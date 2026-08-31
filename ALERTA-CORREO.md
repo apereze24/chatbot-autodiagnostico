@@ -198,9 +198,13 @@ completas a propósito: avisar de una hora a medias sería avisar con la mitad d
 los casos.
 
 **Si el pico dura toda la mañana, ¿llegan diez correos?**
-No. Llega el primero y después uno cada 3 horas, y el asunto dice "Sigue el pico
-· 3ª hora seguida" para distinguirlo de un evento nuevo. Se cambia con el secret
-`ALERTA_CADA_N_HORAS`.
+Sí, uno por cada hora que se dispare, y es a propósito: en una falla que escala,
+cómo va creciendo hora a hora es parte de la información. El asunto dice "Sigue
+el pico · 3ª hora seguida" para que se distinga de un evento nuevo de un vistazo.
+
+Hubo una versión que silenciaba las horas seguidas, y salió mal: el 28 de agosto
+de 2026 dejó sin avisar un pico de 43 casos porque lo contó como "segunda hora"
+de una racha cuyo primer aviso nunca se había enviado. Se quitó.
 
 **¿Puede avisar de algo viejo?**
 No. Si el dato de Redash viene con más de 6 horas de atraso, no envía nada: sería

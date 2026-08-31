@@ -33,7 +33,6 @@ Configuración (en .env local o en Secrets de GitHub / Streamlit)
   ALERTA_REMITENTE          opcional; por defecto SMTP_USUARIO
   ALERTA_DESTINATARIOS      correos separados por coma
   ALERTA_URL_APP            enlace al termómetro, para el botón del correo
-  ALERTA_CADA_N_HORAS       si el pico sigue, cada cuántas horas repetir el aviso
   ALERTA_MAX_ATRASO_HORAS   si el dato viene más viejo que esto, no avisa
   ALERTA_REFRESCAR_REDASH   "1" para forzar una corrida nueva de la consulta
 
@@ -239,8 +238,9 @@ def atraso_del_dato(serie_fechas: pd.Series) -> dt.timedelta:
 def posicion_en_racha(picos: set[int], hora: int) -> int:
     """Si el pico viene de horas seguidas, en qué número de hora vamos.
 
-    Sirve para no mandar un correo por hora durante un evento largo: el primero
-    se manda siempre, y después solo cada ALERTA_CADA_N_HORAS."""
+    Se usa solo para titular el aviso ("3ª hora seguida"), que le dice al que lo
+    lee si esto acaba de empezar o si ya lleva rato escalando. NO sirve para
+    silenciar nada: todas las horas en alerta se avisan."""
     pos = 1
     h = hora - 1
     while h >= 0 and h in picos:
@@ -254,28 +254,13 @@ def clave_hora(momento: pd.Timestamp) -> str:
     return momento.strftime("%Y-%m-%dT%H")
 
 
-def toca_avisar(momento: pd.Timestamp, picos_hora: set[int],
-                avisadas: set[str]) -> bool:
-    """¿Hay que avisar esta hora, o ya se avisó suficiente por este mismo evento?
-
-    Se mira hacia atrás dentro de la racha de horas seguidas en alerta y se
-    pregunta si YA SE AVISÓ alguna, no en qué posición va. La diferencia importa:
-    antes se callaba la segunda hora de una racha por regla fija, y la noche del
-    28-ago eso silenció el pico de las 23:00 porque contaba como "segunda" —
-    cuando el aviso de las 22:00 nunca había salido. Nadie se enteró de ninguna
-    de las dos.
-
-    Ahora, si de esta racha no se ha avisado nada, se avisa. Y si ya se avisó,
-    se espera ALERTA_CADA_N_HORAS antes de repetir."""
-    cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
-    atras = 0
-    h = momento - pd.Timedelta(hours=1)
-    while h.hour in picos_hora and h.date() == momento.date() and atras < 24:
-        atras += 1
-        if clave_hora(h) in avisadas:
-            return atras >= cada
-        h -= pd.Timedelta(hours=1)
-    return True  # nadie de esta racha se avisó todavía
+# NO hay regla que silencie picos seguidos, a propósito. Antes existía —el
+# primer aviso y luego uno cada N horas— y fue justo lo que dejó sin avisar el
+# pico de las 23:00 del 28-ago-2026: lo contó como "segunda hora seguida" y se
+# calló, cuando el aviso de las 22:00 nunca había salido. Si dos horas seguidas
+# se disparan, las dos se avisan: en una falla que escala, cada hora es
+# información nueva. Lo único que evita repetir es la lista de horas ya
+# avisadas, que es otra cosa: eso es no decir dos veces lo mismo.
 
 
 # --- Estado (memoria de lo ya avisado) ---------------------------------------
@@ -351,7 +336,6 @@ def armar_resumen(df: pd.DataFrame, dia: dt.date, hora: int) -> dict | None:
         "dia_total": dia_total, "dia_habitual": dia_habitual,
         "dia_nivel": analisis.nivel(dia_total, dia_habitual),
         "dia_picos": sorted(h for h in a["picos"] if h <= hora),
-        "picos_hora": a["picos"],   # todas las del dia, para el anti-spam
         "ultimas": ultimas,
         "posicion": posicion_en_racha(a["picos"], hora),
     }
@@ -550,8 +534,8 @@ def cuerpo_html(r: dict) -> str:
         normal. En los últimos 90 días eso habría ocurrido 57 veces, y en 6 de
         cada 10 días no habría llegado ningún correo.
         <br><br>
-        Si el pico continúa, el aviso se repite cada
-        {max(1, _entero('ALERTA_CADA_N_HORAS', 3))} horas, no cada hora.
+        Si un evento se alarga, cada hora en alerta se avisa por separado: en una
+        falla que escala, cómo va creciendo es parte de la información.
       </div>
     </td></tr>
   </table>
@@ -729,7 +713,6 @@ def enviar(asunto_txt: str, html: str, texto: str, destinos: list[str]) -> None:
 
 def mensaje_chat_de_prueba() -> str:
     """La versión corta, para comprobar que el webhook del espacio funciona."""
-    cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
     return "\n".join([
         "✅ *La alerta quedó configurada*",
         "",
@@ -747,7 +730,8 @@ def mensaje_chat_de_prueba() -> str:
         "Cada aviso trae cuántos fueron, qué falla predominó, *en qué ciudad* se "
         "concentró y por qué canal entraron.",
         "",
-        f"Si un pico se alarga, el aviso se repite cada {cada} horas, no cada hora.",
+        "Si un evento se alarga, cada hora en alerta se avisa por separado: en "
+        "una falla que escala, cómo va creciendo es parte de la información.",
     ])
 
 
@@ -756,7 +740,6 @@ def correo_de_prueba() -> tuple[str, str, str]:
 
     Existe porque, si no, la única forma de saber si el envío funciona es esperar
     a que haya un pico de verdad, y eso puede tardar días."""
-    cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
     asunto_txt = "✅ Prueba de la alerta de autodiagnósticos"
     texto = (
         "Prueba de configuracion\n\n"
@@ -803,9 +786,9 @@ def correo_de_prueba() -> tuple[str, str, str]:
       habría llegado ninguno</b>.</p>
       <p style="margin:0 0 14px">Cada aviso trae cuántos fueron, qué falla
       predominó, <b>en qué ciudad</b> se concentró y por qué canal entraron.</p>
-      <p style="margin:0">Si un pico se alarga varias horas, tampoco llega un
-      correo por hora: llega el primero y después un recordatorio cada
-      {cada} horas mientras siga.</p>
+      <p style="margin:0">Si un evento se alarga, cada hora en alerta se avisa
+      por separado: en una falla que escala, cómo va creciendo es parte de la
+      información.</p>
     </td></tr>
     <tr><td style="padding:0 24px 24px">
       <div style="border-top:1px solid #e8eaed;padding-top:14px;font-size:12px;
@@ -960,12 +943,6 @@ def revisar_hora(df: pd.DataFrame, momento: pd.Timestamp,
 
     print(f"  PICO: {r['casos']} casos vs {r['habitual']:.0f} habituales "
           f"({r['veces']:.1f}×)")
-
-    if not toca_avisar(momento, r["picos_hora"], avisadas):
-        cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
-        print(f"  Este mismo evento ya se avisó hace menos de {cada} horas. "
-              f"No repito todavía.")
-        return "normal"
 
     asunto_txt = asunto(r)
     html = cuerpo_html(r)

@@ -62,11 +62,16 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
    - El último día con datos está en curso, así que se compara solo el tramo de
      horas ya transcurrido (si no, un día a medias parecería una caída).
 
-6. **Alerta por correo (`alertas.py` + `.github/workflows/`):** cada hora revisa
-   la última hora COMPLETA de datos y, si es un pico, manda correo al equipo de
-   CX con el desglose. Corre en **GitHub Actions**, no dentro de la app: una app
-   de Streamlit solo se ejecuta cuando alguien tiene la página abierta, así que
-   no puede vigilar nada por su cuenta.
+6. **Alerta (`alertas.py` + `.github/workflows/`):** cada hora repasa las
+   **últimas 6 horas completas** de datos y avisa cada hora que sea un pico, por
+   **Google Chat** (`CHAT_WEBHOOK_URL`) y/o correo. Corre en **GitHub Actions**,
+   no dentro de la app: una app de Streamlit solo se ejecuta cuando alguien tiene
+   la página abierta, así que no puede vigilar nada por su cuenta.
+   - **Repasa la ventana completa a propósito, no una sola hora.** Antes miraba
+     solo la última hora completa y luego avanzaba sobre un puntero guardado; las
+     dos versiones perdieron alertas reales, porque el atraso con que llega el
+     dato de Redash varía y porque el puntero se puede perder. Regla de diseño:
+     **la memoria no debe decidir si la alerta funciona**, solo si repite.
    - Usa la misma regla que el dashboard (`analisis.py`), por eso la refactorización.
    - `requirements-alertas.txt` es una lista aparte con solo 3 librerías: la
      alerta no necesita Streamlit ni la IA, y así cada corrida horaria tarda
@@ -79,16 +84,24 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
      el refresco.
    - Si el dato viene con más de `ALERTA_MAX_ATRASO_HORAS` (6) de atraso, no
      envía: sería avisar de algo ya pasado.
-   - Anti-spam: en un evento largo no manda un correo por hora. El primero
-     siempre, y después cada `ALERTA_CADA_N_HORAS` (3). El asunto distingue
-     "Pico" de "Sigue el pico · 3ª hora seguida".
-   - `.alerta_estado.json` recuerda la última hora avisada para no repetir si la
-     tarea se relanza a mano; en Actions se conserva con `actions/cache`.
+   - **Sin anti-spam, a propósito.** Cada hora en alerta se avisa por separado:
+     en una falla que escala, cómo crece hora a hora es información. Hubo una
+     regla que silenciaba horas seguidas y causó una falla real (28-ago-2026:
+     silenció un pico de 43 casos por contarlo como "segunda hora" de una racha
+     cuyo primer aviso nunca salió). No reintroducirla. Lo único que evita
+     repetir es la lista de horas ya avisadas, que es otra cosa.
+   - El asunto sí distingue "Pico" de "Sigue el pico · 3ª hora seguida", como
+     contexto para quien lo lee.
+   - `.alerta_estado.json` guarda la **lista de horas ya avisadas** (no un
+     puntero); en Actions se conserva con `actions/cache`. Si esa caché no
+     restaura, el peor caso es repetir un aviso reciente, nunca callarlo.
    - Probar sin enviar nada: `python alertas.py --dia 2026-08-21 --hora 8 --prueba`
      (escribe `alerta_prueba.html`). Sin `SMTP_CLAVE` nunca envía.
    - Comprobar credenciales: `python alertas.py --probar-envio --solo-a x@y.com`
-     manda un correo corto de confirmación. `--solo-a` existe para no dispararle
-     a las 5 personas mientras se configura.
+     manda un aviso corto de confirmación por todos los canales configurados.
+     `--solo-a` existe para no dispararle al equipo entero mientras se configura.
+   - Reproducir un pico conocido: `--dia AAAA-MM-DD --hora H`, o los campos
+     `dia`/`hora` al lanzar el workflow a mano. No toca la memoria.
    - **Guía para el usuario en `ALERTA-CORREO.md`** (paso a paso, sin tecnicismos:
      contraseña de aplicación, secrets de GitHub, cómo verificar). Si cambia algo
      de la configuración, actualizar ese archivo también.
