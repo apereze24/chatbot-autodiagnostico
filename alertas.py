@@ -203,42 +203,30 @@ def ultima_hora_completa(serie_fechas: pd.Series) -> pd.Timestamp | None:
     return serie_fechas.max().floor("h") - pd.Timedelta(hours=1)
 
 
-def horas_pendientes(serie_fechas: pd.Series, estado: dict) -> list[pd.Timestamp]:
-    """Todas las horas completas que faltan por revisar, de la más vieja a la más nueva.
+def horas_a_revisar(serie_fechas: pd.Series) -> list[pd.Timestamp]:
+    """Todas las horas completas de la ventana reciente, de la más vieja a la más nueva.
 
-    Antes se revisaba SOLO la última hora completa, y eso dejaba un hueco por el
-    que se cayó una alerta real (el pico del 28-ago-2026 a las 06:00): el atraso
-    con que llegan los datos de Redash varía entre corridas, así que la corrida de
-    las 07:10 miró las 05:00 y la de las 08:10 ya miraba las 07:00. Las 06:00 no
-    las revisó nadie. Lo mismo pasaría si GitHub retrasa o se salta una corrida,
-    que es algo que sí ocurre.
+    Se revisa SIEMPRE la ventana completa, sin depender de ninguna memoria. Esa
+    decisión es deliberada y viene de dos fallas reales:
 
-    Ahora se avanza sobre un puntero guardado, así que ninguna hora se pierde y
-    una corrida se pone al día con las que quedaron atrás."""
+    1. Al principio se revisaba solo la última hora completa. Como el atraso con
+       que llegan los datos de Redash varía entre corridas, una hora podía
+       quedarse sin revisar: el pico del 28-ago-2026 a las 06:00 se perdió así.
+    2. Después se avanzaba sobre un puntero guardado, que arregla lo anterior
+       mientras el puntero sobreviva. Pero si se pierde —caché de GitHub que no
+       restaura, corrida que falla, tarea que se salta— se volvía al caso 1 y la
+       alerta fallaba CALLÁNDOSE. Esa noche se perdieron los picos de las 22:00
+       y 23:00 del 28-ago.
+
+    Repasar la ventana entera cuesta milisegundos y no puede perder una hora. Lo
+    que evita repetir avisos es la lista de horas ya avisadas, no esta función:
+    así, si la memoria se pierde, el peor caso es repetir un aviso reciente en
+    vez de callar uno nuevo. Para una alerta, repetir es mucho menos grave."""
     fin = ultima_hora_completa(serie_fechas)
     if fin is None:
         return []
-
-    # Nunca mirar más atrás que la ventana de atraso aceptable: si algo quedó
-    # sin revisar por más tiempo que eso, avisarlo ahora sería avisar de algo
-    # ya pasado.
     ventana = max(1, _entero("ALERTA_MAX_ATRASO_HORAS", 6))
-    mas_viejo = fin - pd.Timedelta(hours=ventana - 1)
-
-    inicio = None
-    guardado = estado.get("ultima_hora_revisada")
-    if guardado:
-        try:
-            inicio = pd.Timestamp(guardado) + pd.Timedelta(hours=1)
-        except Exception:
-            inicio = None
-    if inicio is None or inicio > fin:
-        # Sin puntero (primera corrida, o caché perdida): solo la última hora.
-        # Así una instalación nueva no dispara una ráfaga de avisos viejos.
-        inicio = fin
-    inicio = max(inicio, mas_viejo)
-
-    return list(pd.date_range(inicio, fin, freq="h"))
+    return list(pd.date_range(fin - pd.Timedelta(hours=ventana - 1), fin, freq="h"))
 
 
 def atraso_del_dato(serie_fechas: pd.Series) -> dt.timedelta:
@@ -261,27 +249,64 @@ def posicion_en_racha(picos: set[int], hora: int) -> int:
     return pos
 
 
-def toca_avisar(pos: int) -> bool:
+def clave_hora(momento: pd.Timestamp) -> str:
+    """Cómo se identifica una hora en la lista de avisadas."""
+    return momento.strftime("%Y-%m-%dT%H")
+
+
+def toca_avisar(momento: pd.Timestamp, picos_hora: set[int],
+                avisadas: set[str]) -> bool:
+    """¿Hay que avisar esta hora, o ya se avisó suficiente por este mismo evento?
+
+    Se mira hacia atrás dentro de la racha de horas seguidas en alerta y se
+    pregunta si YA SE AVISÓ alguna, no en qué posición va. La diferencia importa:
+    antes se callaba la segunda hora de una racha por regla fija, y la noche del
+    28-ago eso silenció el pico de las 23:00 porque contaba como "segunda" —
+    cuando el aviso de las 22:00 nunca había salido. Nadie se enteró de ninguna
+    de las dos.
+
+    Ahora, si de esta racha no se ha avisado nada, se avisa. Y si ya se avisó,
+    se espera ALERTA_CADA_N_HORAS antes de repetir."""
     cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
-    return pos == 1 or pos % cada == 0
+    atras = 0
+    h = momento - pd.Timedelta(hours=1)
+    while h.hour in picos_hora and h.date() == momento.date() and atras < 24:
+        atras += 1
+        if clave_hora(h) in avisadas:
+            return atras >= cada
+        h -= pd.Timedelta(hours=1)
+    return True  # nadie de esta racha se avisó todavía
 
 
-# --- Estado (para no repetir el mismo aviso) ---------------------------------
+# --- Estado (memoria de lo ya avisado) ---------------------------------------
+# La memoria es "qué horas ya se avisaron", no "hasta dónde revisé". Con la
+# segunda forma, perderla hacía que la alerta se callara; con esta, perderla
+# solo puede hacer que repita un aviso reciente. Para una alerta, repetir es
+# mucho menos grave que callar.
+MAXIMO_RECORDADAS = 72  # tres días: de sobra, y el archivo queda diminuto
+
+
 def estado_leer() -> dict:
     try:
-        return json.loads(ARCHIVO_ESTADO.read_text(encoding="utf-8"))
+        datos = json.loads(ARCHIVO_ESTADO.read_text(encoding="utf-8"))
+        return datos if isinstance(datos, dict) else {}
     except Exception:
         return {}
 
 
-def estado_guardar(hasta: pd.Timestamp) -> None:
-    """Recuerda hasta qué hora se revisó, para que la próxima corrida siga desde ahí."""
+def avisadas_de(estado: dict) -> set[str]:
+    valores = estado.get("avisadas")
+    return set(valores) if isinstance(valores, list) else set()
+
+
+def estado_guardar(avisadas: set[str]) -> None:
+    """Guarda las horas ya avisadas, quedándose con las más recientes."""
     try:
-        ARCHIVO_ESTADO.write_text(
-            json.dumps({"ultima_hora_revisada": hasta.isoformat()}),
-            encoding="utf-8")
-    except Exception as e:  # no es crítico: en el peor caso se repite un aviso
-        print(f"  (no pude guardar el estado: {e})")
+        recientes = sorted(avisadas)[-MAXIMO_RECORDADAS:]
+        ARCHIVO_ESTADO.write_text(json.dumps({"avisadas": recientes}),
+                                  encoding="utf-8")
+    except Exception as e:  # en el peor caso se repite un aviso, no se pierde
+        print(f"  (no pude guardar el registro de avisos: {e})")
 
 
 # --- Resumen de lo que está pasando ------------------------------------------
@@ -326,6 +351,7 @@ def armar_resumen(df: pd.DataFrame, dia: dt.date, hora: int) -> dict | None:
         "dia_total": dia_total, "dia_habitual": dia_habitual,
         "dia_nivel": analisis.nivel(dia_total, dia_habitual),
         "dia_picos": sorted(h for h in a["picos"] if h <= hora),
+        "picos_hora": a["picos"],   # todas las del dia, para el anti-spam
         "ultimas": ultimas,
         "posicion": posicion_en_racha(a["picos"], hora),
     }
@@ -873,53 +899,59 @@ def main(argv=None) -> int:
           f"(hace {atraso})")
 
     estado = {} if args.ignorar_estado else estado_leer()
+    avisadas = avisadas_de(estado)
 
     if forzado:
         dia = (dt.date.fromisoformat(args.dia) if args.dia else serie.max().date())
         hora = args.hora if args.hora is not None else int(serie.max().hour)
-        pendientes = [pd.Timestamp(dia) + pd.Timedelta(hours=hora)]
+        aRevisar = [pd.Timestamp(dia) + pd.Timedelta(hours=hora)]
     else:
         tope = _entero("ALERTA_MAX_ATRASO_HORAS", 6)
         if atraso > dt.timedelta(hours=tope):
             print(f"El dato viene con más de {tope} horas de atraso: no aviso, "
                   f"porque sería una alerta sobre algo ya pasado.")
             return 0
-        pendientes = horas_pendientes(serie, estado)
+        aRevisar = horas_a_revisar(serie)
 
-    if not pendientes:
-        print("No hay horas nuevas por revisar.")
+    if not aRevisar:
+        print("No hay horas completas por revisar.")
         return 0
 
     print("Horas por revisar: "
-          + ", ".join(t.strftime("%d/%m %H:00") for t in pendientes))
+          + ", ".join(t.strftime("%d/%m %H:00") for t in aRevisar))
+    if avisadas:
+        print(f"Ya avisadas antes: {len(avisadas)} horas en memoria")
 
     hubo_fallo = False
-    ultima_ok = None
-    for momento in pendientes:
+    for momento in aRevisar:
         print()
-        resultado = revisar_hora(df, momento.date(), int(momento.hour),
-                                 destinos, args)
-        if resultado == "fallo":
-            # No se avanza el puntero: así la próxima corrida vuelve a intentar
-            # esta hora en vez de dejar el aviso perdido.
+        resultado = revisar_hora(df, momento, destinos, args, avisadas)
+        if resultado == "avisado":
+            avisadas.add(clave_hora(momento))
+        elif resultado == "fallo":
+            # No se marca como avisada: la próxima corrida lo reintenta, porque
+            # la hora sigue dentro de la ventana que se repasa completa.
             hubo_fallo = True
-            break
-        ultima_ok = momento
 
-    if ultima_ok is not None and not forzado and not args.prueba:
-        estado_guardar(ultima_ok)
+    if not forzado and not args.prueba:
+        estado_guardar(avisadas)
 
     return 1 if hubo_fallo else 0
 
 
-def revisar_hora(df: pd.DataFrame, dia: dt.date, hora: int,
-                 destinos: list[str], args) -> str:
+def revisar_hora(df: pd.DataFrame, momento: pd.Timestamp,
+                 destinos: list[str], args, avisadas: set[str]) -> str:
     """Revisa UNA hora y avisa si hace falta.
 
     Devuelve "normal" si no había nada que avisar o no tocaba, "avisado" si el
     aviso salió por algún canal, y "fallo" si había que avisar y ningún canal
     pudo entregarlo."""
+    dia, hora = momento.date(), int(momento.hour)
     print(f"Revisando {dia} a las {hora:02d}:00…")
+
+    if clave_hora(momento) in avisadas and not args.ignorar_estado:
+        print("  Ya se avisó esta hora antes. No repito.")
+        return "normal"
 
     r = armar_resumen(df, dia, hora)
     if r is None:
@@ -927,12 +959,12 @@ def revisar_hora(df: pd.DataFrame, dia: dt.date, hora: int,
         return "normal"
 
     print(f"  PICO: {r['casos']} casos vs {r['habitual']:.0f} habituales "
-          f"({r['veces']:.1f}×) · hora {r['posicion']}ª de la racha")
+          f"({r['veces']:.1f}×)")
 
-    if not toca_avisar(r["posicion"]):
+    if not toca_avisar(momento, r["picos_hora"], avisadas):
         cada = max(1, _entero("ALERTA_CADA_N_HORAS", 3))
-        print(f"  El pico ya se avisó y sigue; el próximo recordatorio va cada "
-              f"{cada} horas. No envío.")
+        print(f"  Este mismo evento ya se avisó hace menos de {cada} horas. "
+              f"No repito todavía.")
         return "normal"
 
     asunto_txt = asunto(r)

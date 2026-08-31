@@ -67,8 +67,11 @@ jobs:
       - name: Instalar lo mínimo necesario
         run: pip install -r requirements-alertas.txt
 
-      # Guarda memoria de cuál fue la última hora avisada, para no repetir el
-      # mismo correo si la tarea se vuelve a lanzar a mano.
+      # Memoria de qué horas ya se avisaron, para no repetir el mismo aviso.
+      # Si esta caché no restaura, la alerta NO se pierde: cada corrida repasa
+      # la ventana completa de horas recientes, así que en el peor caso repite
+      # un aviso en vez de callarlo. Antes no era así, y por eso se perdieron
+      # los picos del 28-ago.
       - name: Recuperar el registro de avisos ya enviados
         uses: actions/cache@v4
         with:
