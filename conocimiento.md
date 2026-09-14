@@ -34,6 +34,28 @@ Cada fila de la tabla = **un intento de autodiagnóstico** de un cliente.
 **Regla importante:** `canceled` NO significa que el cliente canceló. Significa
 que el autodiagnóstico no pudo resolverlo solo y lo escaló.
 
+## Cómo llamamos las cosas (sinónimos → columna)
+
+Cuando en una pregunta aparezcan estas palabras, esta es la columna que se debe
+usar. Es la tabla que desambigua los nombres técnicos.
+
+| Si preguntan por... | Se usa la columna |
+|---|---|
+| **resultado**, resultados, desglose/análisis de resultados, desenlace, "en qué terminó", "qué se le dijo al cliente", directriz | **`final_outcome`** |
+| estado del proceso, tasa de éxito / falla / escalamiento, completados, fallidos, escalados | `status` |
+| causa, motivo de falla, por qué falló, error técnico | `failure_reason` |
+| canal, origen, "por dónde entró" | `source` |
+| ciudad, zona, dónde | `nombre_ciudad` |
+| estado del ticket, si ya se resolvió | `ticket_stage` |
+| área, equipo responsable, quién lo atendió | `ticket_team` |
+| cuánto tardó en resolverse | `ticket_resolucion_horas` |
+| cuánto duró el autodiagnóstico | `duration_seconds` / `duracion_min` |
+
+**La más importante de esta tabla:** "resultado" significa **`final_outcome`**,
+no `status`. `status` es el estado técnico con que terminó el proceso (si corrió
+o si se cayó); `final_outcome` es lo que finalmente se le comunicó al cliente,
+que es lo que el negocio entiende por "el resultado".
+
 ## Directriz final entregada al cliente (columna `final_outcome`)
 
 Es **lo que finalmente se le comunicó al cliente**. Es la columna más

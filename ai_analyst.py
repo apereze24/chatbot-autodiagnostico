@@ -68,6 +68,12 @@ SQL: SELECT strftime(started_at,'%Y-%m') AS mes, COUNT(*) AS total
      FROM autodiagnosticos WHERE started_at IS NOT NULL
      GROUP BY 1 ORDER BY 1
 
+P: ¿Cómo se reparten los resultados de los autodiagnósticos?
+SQL: SELECT final_outcome AS resultado, COUNT(*) AS casos,
+       ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER (),1) AS pct
+     FROM autodiagnosticos WHERE final_outcome IS NOT NULL
+     GROUP BY final_outcome ORDER BY casos DESC
+
 P: ¿Cuáles son las principales causas de falla?
 SQL: SELECT failure_reason AS causa, COUNT(*) AS casos,
        ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER (),1) AS pct
@@ -120,9 +126,13 @@ class ConsultaSQL(BaseModel):
 # Solo se agregan si la columna existe en los datos.
 PISTAS_COLUMNAS = {
     "source": "canal/origen del autodiagnóstico (portal, whatsapp, sysbrazo).",
-    "status": "resultado del PROCESO de autodiagnóstico: 'finished'=completado, "
+    "status": "ESTADO TÉCNICO con que terminó el proceso: 'finished'=completado, "
               "'failed'=falló, 'canceled'=escaló a ticket, 'running'=en curso. "
-              "NO es el estado del ticket.",
+              "NO es el estado del ticket. OJO: si preguntan por el RESULTADO o "
+              "el DESENLACE del autodiagnóstico, la columna correcta es "
+              "'final_outcome', no esta. Usa 'status' solo cuando pregunten "
+              "explícitamente por el estado técnico del proceso, o por tasas de "
+              "éxito/falla/escalamiento.",
     "duration_seconds": "cuánto duró el proceso, en segundos.",
     "duracion_min": "cuánto duró el proceso, en minutos.",
     "failure_reason": "causa técnica por la que falló el autodiagnóstico.",
@@ -142,9 +152,14 @@ PISTAS_COLUMNAS = {
     "ticket_resolucion_horas": "horas que tardó en resolverse el ticket "
                                "(cierre - apertura). Úsalo para 'qué tan rápido "
                                "resuelven'. Solo tiene valor si el ticket ya cerró.",
-    "final_outcome": "DIRECTRIZ FINAL entregada al cliente al terminar el "
-                     "autodiagnóstico (el desenlace que se le comunicó). Valores: "
+    "final_outcome": "EL RESULTADO del autodiagnóstico: la directriz final "
+                     "entregada al cliente al terminar (el desenlace que se le "
+                     "comunicó). ES LA COLUMNA POR DEFECTO cuando el usuario "
+                     "pregunta por 'resultado', 'resultados', 'desenlace', 'en "
+                     "qué terminó', 'qué se le dijo al cliente' o pide un "
+                     "'desglose/análisis de resultados'. Valores: "
                      "'ALL_OK'=todo bien, sin problema; "
+                     "'ALL_OK_WITH_WARNINGS'=bien, pero con advertencias; "
                      "'TICKET_CREATED'=se generó un ticket para revisión manual; "
                      "'CREDIT_RECHARGED'=se recargó crédito al cliente; "
                      "'BLOCKED'=proceso bloqueado (ej. incidente abierto); "

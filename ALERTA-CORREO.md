@@ -193,9 +193,18 @@ seguimiento normal: el puntero de "hasta dónde revisé" no se mueve.
 ## Preguntas que suelen salir
 
 **¿Cuánto tarda en avisar?**
-El aviso llega unos 10 minutos después de que termina la hora. Se revisan horas
-completas a propósito: avisar de una hora a medias sería avisar con la mitad de
-los casos.
+El aviso sale **apenas se cruza el umbral**, sin esperar a que la hora termine.
+Si a las 14:20 ya se ejecutaron el doble de los autodiagnósticos que suele haber
+en toda la hora de las 14:00, el mensaje sale a las 14:20, no a las 15:10.
+
+Comparar una hora a medias contra lo habitual de la hora completa parece injusto,
+y justamente por eso es seguro: si a los 20 minutos ya va el doble de lo que
+normalmente pasa en 60, el pico ya ocurrió y solo puede crecer. Nunca avisa de
+más por mirar datos parciales.
+
+El mensaje lo dice con todas las letras ("hora en curso", con el minuto de corte)
+para que nadie lea la cifra parcial como el total del pico. Se avisa **una sola
+vez por hora**: si ya salió el aviso con la hora en curso, al cerrar no se repite.
 
 **Si el pico dura toda la mañana, ¿llegan diez correos?**
 Sí, uno por cada hora que se dispare, y es a propósito: en una falla que escala,

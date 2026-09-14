@@ -63,10 +63,20 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
      horas ya transcurrido (si no, un día a medias parecería una caída).
 
 6. **Alerta (`alertas.py` + `.github/workflows/`):** cada hora repasa las
-   **últimas 6 horas completas** de datos y avisa cada hora que sea un pico, por
+   **últimas 6 horas completas más la hora en curso** y avisa cada hora que sea
+   un pico, por
    **Google Chat** (`CHAT_WEBHOOK_URL`) y/o correo. Corre en **GitHub Actions**,
    no dentro de la app: una app de Streamlit solo se ejecuta cuando alguien tiene
    la página abierta, así que no puede vigilar nada por su cuenta.
+   - **Avisa sin esperar a que la hora cierre** (`ALERTA_HORA_EN_CURSO`, por
+     defecto encendido). Comparar una hora a medias contra la mediana de esa
+     hora COMPLETA parece injusto, y por eso es seguro: si a los 20 minutos ya
+     lleva el doble de lo que suele haber en 60, el pico es un hecho y solo
+     puede crecer. Nunca dispara de más por mirar datos parciales; antes
+     siempre disparaba tarde. El aviso dice "hora en curso" y da el minuto de
+     corte, para que nadie lea la cifra parcial como el total.
+     Solo se avisa UNA vez por hora: si se avisó en curso, al cerrar no se
+     repite (la lista de horas avisadas no distingue parcial de completa).
    - **Repasa la ventana completa a propósito, no una sola hora.** Antes miraba
      solo la última hora completa y luego avanzaba sobre un puntero guardado; las
      dos versiones perdieron alertas reales, porque el atraso con que llega el

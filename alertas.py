@@ -114,8 +114,16 @@ def _entero(nombre: str, defecto: int) -> int:
         return defecto
 
 
-def _si(nombre: str) -> bool:
-    return os.environ.get(nombre, "").strip() in ("1", "true", "si", "sí")
+def _si(nombre: str, defecto: bool = False) -> bool:
+    """Lee un interruptor del entorno. Vacío o ausente = el valor por defecto.
+
+    Igual que `_texto`: en GitHub, un secret que existe pero está sin llenar
+    llega como cadena vacía, no como ausente. Sin este cuidado, un secret vacío
+    apagaría un interruptor que viene encendido de fábrica."""
+    valor = os.environ.get(nombre, "").strip().lower()
+    if not valor:
+        return defecto
+    return valor in ("1", "true", "si", "sí")
 
 
 def _tapado(valor: str, correo: bool = False) -> str:
@@ -225,7 +233,21 @@ def horas_a_revisar(serie_fechas: pd.Series) -> list[pd.Timestamp]:
     if fin is None:
         return []
     ventana = max(1, _entero("ALERTA_MAX_ATRASO_HORAS", 6))
-    return list(pd.date_range(fin - pd.Timedelta(hours=ventana - 1), fin, freq="h"))
+    horas = list(pd.date_range(fin - pd.Timedelta(hours=ventana - 1), fin, freq="h"))
+
+    # Y ADEMÁS la hora en curso, que es la que llega a medias. Se incluye a
+    # propósito para avisar de inmediato y no esperar a que la hora cierre: en
+    # una falla masiva, esperar el cierre puede costar una hora entera de
+    # reacción.
+    #
+    # Comparar una hora a medias contra la mediana de esa hora COMPLETA parece
+    # injusto, y lo es: por eso es seguro. Si a los 20 minutos ya lleva el doble
+    # de lo que suele haber en los 60, el pico es un hecho y solo puede crecer.
+    # Nunca dispara de más por mirar datos parciales; a lo sumo dispara tarde,
+    # que es lo que pasaba antes siempre.
+    if _si("ALERTA_HORA_EN_CURSO", True):
+        horas.append(serie_fechas.max().floor("h"))
+    return horas
 
 
 def atraso_del_dato(serie_fechas: pd.Series) -> dt.timedelta:
@@ -301,6 +323,12 @@ def armar_resumen(df: pd.DataFrame, dia: dt.date, hora: int) -> dict | None:
     con_fecha = serie.dropna()
     dia_max = con_fecha.max().date()
 
+    # ¿Esta hora ya cerró, o es la que está transcurriendo ahora? Importa para
+    # el aviso: "lleva 30 casos y va en curso" y "cerró con 30" son cosas muy
+    # distintas para quien lo lee.
+    ultimo = con_fecha.max()
+    en_curso = (dia == ultimo.date() and hora == int(ultimo.hour))
+
     a = analisis.analizar(con_fecha, dia, dia_max)
     if not a["hay_base"]:
         return None
@@ -330,6 +358,7 @@ def armar_resumen(df: pd.DataFrame, dia: dt.date, hora: int) -> dict | None:
 
     return {
         "dia": dia, "hora": hora, "casos": casos, "habitual": base,
+        "en_curso": en_curso, "hasta": ultimo,
         "veces": casos / base if base else None,
         "perfil": perfil,
         "cambios": analisis.lo_que_cambio(perfil),
@@ -380,10 +409,13 @@ def asunto(r: dict) -> str:
         if clave == "ciudad":
             donde = f" · {analisis.bonito(item['valor'])}"
             break
+    # "va en" y no "casos" a secas: la hora todavía corre y la cifra va a subir.
+    # Decirlo en el asunto evita que alguien lea el número como el total final.
+    cuantos = f"va en {r['casos']}" if r.get("en_curso") else f"{r['casos']} casos"
     if r["posicion"] > 1:
         return (f"🔥 Sigue el pico de autodiagnósticos · {r['hora']:02d}:00 · "
-                f"{r['casos']} casos · {r['posicion']}ª hora seguida{donde}")
-    return (f"🔥 Pico de autodiagnósticos · {r['hora']:02d}:00 · {r['casos']} casos "
+                f"{cuantos} · {r['posicion']}ª hora seguida{donde}")
+    return (f"🔥 Pico de autodiagnósticos · {r['hora']:02d}:00 · {cuantos} "
             f"({veces} lo habitual){donde}")
 
 
@@ -450,6 +482,26 @@ def cuerpo_html(r: dict) -> str:
             f"font-size:14px;font-weight:600;display:inline-block'>"
             f"Ver el detalle en el termómetro</a></td></tr>")
 
+    # Una hora a medias y una hora cerrada se cuentan distinto: si no se dice,
+    # el que lo lee toma la cifra parcial por el total del pico.
+    if r.get("en_curso"):
+        cabecera_rango = f"{r['hora']:02d}:00, hora en curso"
+        bajo_cifra = (f"autodiagnósticos en lo que va de la hora (corte "
+                      f"{r['hasta']:%H:%M}) — <b>{veces_txt}</b>, comparado con "
+                      f"la hora completa")
+        corte_dia = f"{r['hasta']:%H:%M}"
+        nota_curso = ("<div style=\"font-size:13px;color:#b06000;"
+                      "background:#fef7e0;border-radius:6px;padding:10px 12px;"
+                      "margin-top:14px\">⏱️ <b>La hora todavía corre.</b> "
+                      "El aviso sale apenas se cruza el umbral, sin esperar a "
+                      "que la hora cierre, así que la cifra final será mayor."
+                      "</div>")
+    else:
+        cabecera_rango = f"{r['hora']:02d}:00 a {r['hora']:02d}:59"
+        bajo_cifra = f"autodiagnósticos en esa hora — <b>{veces_txt}</b>"
+        corte_dia = f"las {r['hora']:02d}:59"
+        nota_curso = ""
+
     return f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -466,7 +518,7 @@ def cuerpo_html(r: dict) -> str:
       <div style="color:#ffffff;font-size:18px;font-weight:700">
         🔥 Pico de autodiagnósticos</div>
       <div style="color:#ffffff;opacity:.9;font-size:13px;padding-top:2px">
-        {analisis.fecha_larga(r['dia'])} · {r['hora']:02d}:00 a {r['hora']:02d}:59
+        {analisis.fecha_larga(r['dia'])} · {cabecera_rango}
         (hora de Colombia)</div>
     </td></tr>
 
@@ -474,9 +526,10 @@ def cuerpo_html(r: dict) -> str:
       <div style="font-size:40px;font-weight:700;color:#202124;line-height:1">
         {r['casos']}</div>
       <div style="font-size:14px;color:#3c4043;padding-top:4px">
-        autodiagnósticos en esa hora — <b>{veces_txt}</b>
+        {bajo_cifra}
         <span style="color:#80868b">({r['habitual']:.0f} en un día normal a esa
         hora)</span></div>
+      {nota_curso}
       <div style="font-size:14px;color:#3c4043;padding:16px 0 0;line-height:1.5">
         {interpretacion(r)}</div>
     </td></tr>
@@ -512,8 +565,8 @@ def cuerpo_html(r: dict) -> str:
     <tr><td style="padding:20px 24px 0">
       <div style="background:#f8f9fa;border-radius:8px;padding:14px 16px">
         <div style="font-size:13px;color:#3c4043">
-          <b>El día hasta ahora:</b> {r['dia_total']} autodiagnósticos hasta las
-          {r['hora']:02d}:59, cuando un día normal llevaría
+          <b>El día hasta ahora:</b> {r['dia_total']} autodiagnósticos hasta
+          {corte_dia}, cuando un día normal llevaría
           {r['dia_habitual']:.0f}.
           {nivel['icono']} {nivel['etiqueta']}
           ({r['dia_nivel']['desvio'] * 100:+.0f}%).</div>
@@ -545,13 +598,24 @@ def cuerpo_html(r: dict) -> str:
 
 def cuerpo_texto(r: dict) -> str:
     """Versión en texto plano, para clientes de correo que no muestran HTML."""
+    if r.get("en_curso"):
+        rango_txt = f"{r['hora']:02d}:00, hora en curso"
+        cifra_txt = (f"{r['casos']} autodiagnosticos en lo que va de la hora "
+                     f"(corte {r['hasta']:%H:%M}), cuando en la hora COMPLETA "
+                     f"suele haber {r['habitual']:.0f}. La hora todavia corre: "
+                     f"la cifra final sera mayor.")
+        corte_txt = f"{r['hasta']:%H:%M}"
+    else:
+        rango_txt = f"{r['hora']:02d}:00 a {r['hora']:02d}:59"
+        cifra_txt = (f"{r['casos']} autodiagnosticos en esa hora "
+                     f"({r['habitual']:.0f} en un dia normal a esa hora).")
+        corte_txt = f"las {r['hora']:02d}:59"
+
     lineas = [
         f"PICO DE AUTODIAGNOSTICOS",
-        f"{analisis.fecha_larga(r['dia'])}, {r['hora']:02d}:00 a {r['hora']:02d}:59 "
-        f"(hora de Colombia)",
+        f"{analisis.fecha_larga(r['dia'])}, {rango_txt} (hora de Colombia)",
         "",
-        f"{r['casos']} autodiagnosticos en esa hora "
-        f"({r['habitual']:.0f} en un dia normal a esa hora).",
+        cifra_txt,
         "",
         interpretacion(r),
         "",
@@ -578,8 +642,8 @@ def cuerpo_texto(r: dict) -> str:
 
     lineas += [
         "",
-        f"El dia hasta ahora: {r['dia_total']} autodiagnosticos hasta las "
-        f"{r['hora']:02d}:59, cuando un dia normal llevaria "
+        f"El dia hasta ahora: {r['dia_total']} autodiagnosticos hasta "
+        f"{corte_txt}, cuando un dia normal llevaria "
         f"{r['dia_habitual']:.0f} ({r['dia_nivel']['desvio'] * 100:+.0f}%).",
         f"Horas en alerta hoy: "
         f"{', '.join(f'{h:02d}:00' for h in r['dia_picos'])}.",
@@ -631,13 +695,24 @@ def mensaje_chat(r: dict) -> str:
     cabeza = (f"🔥 *Sigue el pico · {r['posicion']}ª hora seguida*"
               if r["posicion"] > 1 else "🔥 *Pico de autodiagnósticos*")
 
+    if r.get("en_curso"):
+        cuando = (f"*{r['hora']:02d}:00, hora en curso* · "
+                  f"{analisis.fecha_larga(r['dia'])}")
+        cuerpo = (f"*{r['casos']} autodiagnósticos* en lo que va de la hora "
+                  f"(corte {r['hasta']:%H:%M}) — {veces}, y eso comparado con "
+                  f"la hora COMPLETA ({r['habitual']:.0f} en un día normal). "
+                  f"La hora todavía corre, así que la cifra va a subir.")
+    else:
+        cuando = (f"*{r['hora']:02d}:00 a {r['hora']:02d}:59* · "
+                  f"{analisis.fecha_larga(r['dia'])}")
+        cuerpo = (f"*{r['casos']} autodiagnósticos* en esa hora — {veces} "
+                  f"({r['habitual']:.0f} en un día normal a esa hora).")
+
     lineas = [
         cabeza,
-        f"*{r['hora']:02d}:00 a {r['hora']:02d}:59* · "
-        f"{analisis.fecha_larga(r['dia'])}",
+        cuando,
         "",
-        f"*{r['casos']} autodiagnósticos* en esa hora — {veces} "
-        f"({r['habitual']:.0f} en un día normal a esa hora).",
+        cuerpo,
         "",
         interpretacion(r),
         "",
@@ -656,10 +731,12 @@ def mensaje_chat(r: dict) -> str:
         lineas.append(f"• {ETIQUETAS[clave]}: *{valor}* — {it['pct']:.0f}% "
                       f"de los casos ({hab}){marca}")
 
+    corte = (f"{r['hasta']:%H:%M}" if r.get("en_curso")
+             else f"las {r['hora']:02d}:59")
     lineas += [
         "",
         "*El día hasta ahora*",
-        f"{r['dia_total']} autodiagnósticos hasta las {r['hora']:02d}:59, cuando "
+        f"{r['dia_total']} autodiagnósticos hasta {corte}, cuando "
         f"un día normal llevaría {r['dia_habitual']:.0f} "
         f"({r['dia_nivel']['desvio'] * 100:+.0f}%).",
         f"Horas en alerta hoy: "
@@ -941,8 +1018,10 @@ def revisar_hora(df: pd.DataFrame, momento: pd.Timestamp,
         print("  Dentro de lo normal. No hay nada que avisar.")
         return "normal"
 
+    curso = (f" [hora EN CURSO, corte {r['hasta']:%H:%M}]"
+             if r.get("en_curso") else "")
     print(f"  PICO: {r['casos']} casos vs {r['habitual']:.0f} habituales "
-          f"({r['veces']:.1f}×)")
+          f"({r['veces']:.1f}×){curso}")
 
     asunto_txt = asunto(r)
     html = cuerpo_html(r)
