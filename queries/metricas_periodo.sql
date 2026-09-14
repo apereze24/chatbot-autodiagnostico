@@ -14,9 +14,20 @@
 -- lunes del cliente y no el de UTC. Sin esa resta, todo lo que ocurre después de
 -- las 7 p.m. se cuenta en el día siguiente.
 --
--- PARÁMETROS: cada consulta usa {{ desde }} y {{ hasta }} (tipo Date en Redash).
--- Al guardar la consulta, Redash los detecta solo y muestra los dos calendarios.
--- Si prefieres ver todo el histórico, borra esas dos líneas del WHERE.
+-- RANGO DE FECHAS: fijo, del 1 de enero del año en curso hasta hoy. No hay
+-- parámetros ni calendarios que llenar en Redash: se abre el dashboard y ya
+-- está. El rango se mueve solo (el 1 de enero próximo vuelve a arrancar desde
+-- cero), porque se calcula con DATE_TRUNC('year', ...) en vez de escribir una
+-- fecha a mano.
+--
+-- Se compara contra (CURRENT_TIMESTAMP - INTERVAL '5 hours') y no contra
+-- CURRENT_DATE a secas: el servidor corre en UTC, así que entre las 7 p.m. y la
+-- medianoche CURRENT_DATE ya es "mañana" para Colombia y el rango se correría un
+-- día hacia adelante.
+--
+-- Si algún día quieres ver otro periodo, cambia el BETWEEN por las dos fechas
+-- que necesites, o vuelve a poner {{ desde }} y {{ hasta }} para que Redash
+-- muestre los calendarios.
 -- =============================================================================
 
 
@@ -40,7 +51,9 @@ SELECT
     COUNT(DISTINCT client_id)                                  AS clientes_distintos
 FROM analytics.v_auto_diagnostic_full
 WHERE started_at IS NOT NULL
-  AND (started_at - INTERVAL '5 hours')::date BETWEEN {{ desde }} AND {{ hasta }}
+  AND (started_at - INTERVAL '5 hours')::date
+      BETWEEN DATE_TRUNC('year', CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
+          AND (CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
 GROUP BY 1, 2, 3, 4, 5, 6
 ORDER BY dia;
 
@@ -64,7 +77,9 @@ SELECT
     COUNT(*) FILTER (WHERE status = 'canceled')                 AS escalados
 FROM analytics.v_auto_diagnostic_full
 WHERE started_at IS NOT NULL
-  AND (started_at - INTERVAL '5 hours')::date BETWEEN {{ desde }} AND {{ hasta }}
+  AND (started_at - INTERVAL '5 hours')::date
+      BETWEEN DATE_TRUNC('year', CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
+          AND (CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
 GROUP BY 1, 2
 ORDER BY semana_inicia;
 
@@ -85,7 +100,9 @@ WITH base AS (
         status
     FROM analytics.v_auto_diagnostic_full
     WHERE started_at IS NOT NULL
-      AND (started_at - INTERVAL '5 hours')::date BETWEEN {{ desde }} AND {{ hasta }}
+      AND (started_at - INTERVAL '5 hours')::date
+          BETWEEN DATE_TRUNC('year', CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
+              AND (CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
 ),
 -- Cada nivel calcula lo mismo, solo cambia cómo se agrupa.
 por_semana AS (
@@ -164,7 +181,9 @@ SELECT
 FROM analytics.v_auto_diagnostic_full
 WHERE started_at IS NOT NULL
   AND final_outcome IS NOT NULL
-  AND (started_at - INTERVAL '5 hours')::date BETWEEN {{ desde }} AND {{ hasta }}
+  AND (started_at - INTERVAL '5 hours')::date
+      BETWEEN DATE_TRUNC('year', CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
+          AND (CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
 GROUP BY 1, 2, 3
 ORDER BY anio_mes, casos DESC;
 
@@ -191,6 +210,8 @@ SELECT
                                                           AS intentos_por_cliente
 FROM analytics.v_auto_diagnostic_full
 WHERE started_at IS NOT NULL
-  AND (started_at - INTERVAL '5 hours')::date BETWEEN {{ desde }} AND {{ hasta }}
+  AND (started_at - INTERVAL '5 hours')::date
+      BETWEEN DATE_TRUNC('year', CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
+          AND (CURRENT_TIMESTAMP - INTERVAL '5 hours')::date
 GROUP BY 1, 2
 ORDER BY anio_mes, autodiagnosticos DESC;
