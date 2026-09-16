@@ -33,6 +33,17 @@
 -- la columna 'source'. Es una dimensión más de agrupación, así que cada consulta
 -- queda con una fila por [su período/dimensión de siempre] + canal, en vez de
 -- una sola fila que mezcle los tres canales.
+--
+-- ESCALADOS: se cuentan con final_outcome='TICKET_CREATED', NO con
+-- status='canceled'. Las dos miden cosas distintas: status='canceled' es que
+-- el PROCESO se detuvo y escaló; final_outcome='TICKET_CREATED' es que la
+-- DIRECTRIZ FINAL al cliente fue "se generó un ticket". Hay autodiagnósticos
+-- con status='finished' (el proceso corrió completo) que igual terminan en
+-- ticket, y esos status='canceled' no los contaba — por eso 'escalados' salía
+-- más bajo que preguntarle al chatbot por TICKET_CREATED.
+-- OJO: final_outcome solo existe desde agosto de 2026. Con el rango fijo
+-- "1 de enero a hoy", los meses de enero a julio van a mostrar escalados=0,
+-- no porque no hubiera escalamiento sino porque esos meses no tienen el dato.
 -- =============================================================================
 
 
@@ -59,7 +70,12 @@ SELECT
     COUNT(*)                                                   AS autodiagnosticos,
     COUNT(*) FILTER (WHERE status = 'finished')                AS completados,
     COUNT(*) FILTER (WHERE status = 'failed')                  AS fallidos,
-    COUNT(*) FILTER (WHERE status = 'canceled')                AS escalados,
+    -- 'escalados' se basa en final_outcome, no en status: hay autodiagnósticos
+    -- con status='finished' que igual terminan en ticket, y status='canceled'
+    -- no los contaba. OJO: final_outcome solo existe desde agosto de 2026, así
+    -- que los meses anteriores van a mostrar 'escalados' en 0 (no es que no
+    -- hubiera escalamiento, es que ese periodo no tiene el dato).
+    COUNT(*) FILTER (WHERE final_outcome = 'TICKET_CREATED')   AS escalados,
     COUNT(DISTINCT client_id)                                  AS clientes_distintos
 FROM analytics.v_auto_diagnostic_full
 WHERE started_at IS NOT NULL
@@ -92,7 +108,9 @@ SELECT
           / NULLIF(COUNT(DISTINCT (started_at - INTERVAL '5 hours')::date), 0), 1)
                                                                 AS promedio_por_dia,
     COUNT(*) FILTER (WHERE status = 'failed')                   AS fallidos,
-    COUNT(*) FILTER (WHERE status = 'canceled')                 AS escalados
+    -- Igual que en la consulta 1: basado en final_outcome, no en status. Solo
+    -- tiene dato desde agosto de 2026.
+    COUNT(*) FILTER (WHERE final_outcome = 'TICKET_CREATED')    AS escalados
 FROM analytics.v_auto_diagnostic_full
 WHERE started_at IS NOT NULL
   AND (started_at - INTERVAL '5 hours')::date
@@ -116,6 +134,7 @@ WITH base AS (
     SELECT
         (started_at - INTERVAL '5 hours') AS fecha_local,
         status,
+        final_outcome,
         CASE source
         WHEN 'portal'   THEN 'Portal'
         WHEN 'whatsapp' THEN 'WhatsApp'
@@ -134,21 +153,21 @@ por_semana AS (
     SELECT 'Semana' AS periodo,
            TO_CHAR(DATE_TRUNC('week', fecha_local), 'YYYY-MM-DD') AS etiqueta,
            DATE_TRUNC('week', fecha_local)::date AS ordena,
-           canal, status
+           canal, status, final_outcome
     FROM base
 ),
 por_mes AS (
     SELECT 'Mes' AS periodo,
            TO_CHAR(fecha_local, 'YYYY-MM') AS etiqueta,
            DATE_TRUNC('month', fecha_local)::date AS ordena,
-           canal, status
+           canal, status, final_outcome
     FROM base
 ),
 por_anio AS (
     SELECT 'Año' AS periodo,
            TO_CHAR(fecha_local, 'YYYY') AS etiqueta,
            DATE_TRUNC('year', fecha_local)::date AS ordena,
-           canal, status
+           canal, status, final_outcome
     FROM base
 ),
 todo AS (
@@ -163,10 +182,12 @@ SELECT
     COUNT(*)                                        AS autodiagnosticos,
     COUNT(*) FILTER (WHERE status = 'finished')     AS completados,
     COUNT(*) FILTER (WHERE status = 'failed')       AS fallidos,
-    COUNT(*) FILTER (WHERE status = 'canceled')     AS escalados,
+    -- Basado en final_outcome, no en status (ver nota en la consulta 1). Solo
+    -- tiene dato desde agosto de 2026: antes de eso sale en 0.
+    COUNT(*) FILTER (WHERE final_outcome = 'TICKET_CREATED') AS escalados,
     ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'finished')
           / NULLIF(COUNT(*), 0), 1)                 AS pct_completados,
-    ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'canceled')
+    ROUND(100.0 * COUNT(*) FILTER (WHERE final_outcome = 'TICKET_CREATED')
           / NULLIF(COUNT(*), 0), 1)                 AS pct_escalados
 FROM todo
 GROUP BY periodo, etiqueta, ordena, canal
@@ -253,7 +274,9 @@ SELECT
             ), 1)                                         AS pct_del_mes,
     COUNT(DISTINCT client_id)                             AS clientes_distintos,
     COUNT(*) FILTER (WHERE status = 'failed')             AS fallidos,
-    COUNT(*) FILTER (WHERE status = 'canceled')           AS escalados,
+    -- Basado en final_outcome, no en status (ver nota en la consulta 1). Solo
+    -- tiene dato desde agosto de 2026: antes de eso sale en 0.
+    COUNT(*) FILTER (WHERE final_outcome = 'TICKET_CREATED') AS escalados,
     -- Si un mismo cliente vuelve a diagnosticar, su problema no se resolvió.
     -- Un número alto aquí es una señal de servicio, no de volumen.
     ROUND(COUNT(*)::numeric / NULLIF(COUNT(DISTINCT client_id), 0), 2)
