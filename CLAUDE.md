@@ -62,9 +62,9 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
    - El último día con datos está en curso, así que se compara solo el tramo de
      horas ya transcurrido (si no, un día a medias parecería una caída).
 
-6. **Alerta (`alertas.py` + `.github/workflows/`):** cada hora repasa las
-   **últimas 6 horas completas más la hora en curso** y avisa cada hora que sea
-   un pico, por
+6. **Alerta (`alertas.py` + `.github/workflows/`):** revisa **cada 10 minutos**
+   (`cron: "3,13,23,33,43,53 * * * *"`) las **últimas 6 horas completas más la
+   hora en curso**, y avisa cada vez que encuentra un pico, por
    **Google Chat** (`CHAT_WEBHOOK_URL`) y/o correo. Corre en **GitHub Actions**,
    no dentro de la app: una app de Streamlit solo se ejecuta cuando alguien tiene
    la página abierta, así que no puede vigilar nada por su cuenta.
@@ -77,6 +77,21 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
      corte, para que nadie lea la cifra parcial como el total.
      Solo se avisa UNA vez por hora: si se avisó en curso, al cerrar no se
      repite (la lista de horas avisadas no distingue parcial de completa).
+   - **El cron cada 10 min es lo que de verdad hace "inmediato" al aviso.**
+     Revisar la hora en curso no sirve de nada si el programa solo se despierta
+     una vez por hora: en el peor caso seguía tardando ~74 min en avisar de un
+     pico que arrancó al principio de su hora (simulado). Con el cron cada 10
+     min, el peor caso baja a ~24 min y el promedio a ~20 — el piso real son
+     los ~15 min que tarda el dato en llegar a Redash, que esto no puede
+     acortar. `timeout-minutes` bajó de 15 a 5: con corridas cada 10 min, una
+     que se cuelga bloquearía varios ciclos seguidos (`concurrency` las hace
+     esperar en fila, no las corre en paralelo).
+   - **Costo real: 6× más refrescos forzados de Redash por hora** (uno por
+     corrida, `ALERTA_REFRESCAR_REDASH=1` por defecto), porque cada corrida
+     dispara una ejecución nueva de la consulta contra la base de producción,
+     no solo lee el caché. Antes era 1 corrida forzada por hora; ahora son 6.
+     Si Redash o la base empiezan a notarlo, la palanca es espaciar el cron
+     (por ejemplo cada 15 min) antes que volver a la revisión horaria.
    - **Repasa la ventana completa a propósito, no una sola hora.** Antes miraba
      solo la última hora completa y luego avanzaba sobre un puntero guardado; las
      dos versiones perdieron alertas reales, porque el atraso con que llega el

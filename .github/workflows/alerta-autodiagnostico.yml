@@ -15,11 +15,23 @@ name: Alerta de picos de autodiagnóstico
 
 on:
   schedule:
-    # Al minuto 10 de cada hora. Está en UTC: como Colombia es UTC-5, esto cae
-    # al minuto 10 de cada hora local también (el desfase es de horas, no de
-    # minutos). Se deja el minuto 10 y no el 0 para no coincidir con el momento
-    # de más carga en GitHub, que retrasa las tareas programadas.
-    - cron: "10 * * * *"
+    # CADA 10 MINUTOS, no cada hora. Esto es lo que hace que el aviso sea
+    # inmediato, y va de la mano con que alertas.py revise la hora EN CURSO:
+    # de nada sirve poder leer una hora a medias si el programa solo se
+    # despierta una vez por hora.
+    #
+    # Con el cron horario, un pico que arrancaba al minuto 5 se avisaba 65
+    # minutos después (promedio 44 min, peor caso 74). Cada 10 minutos el
+    # promedio baja a ~20 min y el peor caso a ~24.
+    #
+    # El piso son ~15 minutos y no se puede bajar de ahí desde aquí: es lo que
+    # tarda el dato en aparecer en Redash. Por eso no se pone cada 5 minutos,
+    # que duplicaría la carga sobre Redash sin ganar casi nada.
+    #
+    # Los minutos son 3,13,23... y no 0,10,20... a propósito: GitHub retrasa
+    # las tareas programadas cuando hay mucha carga, y los minutos redondos
+    # (sobre todo el 0) son los más congestionados.
+    - cron: "3,13,23,33,43,53 * * * *"
   # Permite lanzarla a mano desde la pestaña Actions, para probar.
   workflow_dispatch:
     inputs:
@@ -51,7 +63,12 @@ concurrency:
 jobs:
   revisar:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Una corrida normal tarda ~40 s (instalar + revisar). Antes el tope eran
+    # 15 min, que no importaba con un cron horario; ahora que el cron es cada
+    # 10 min, una corrida que se cuelga bloquearía varios ciclos seguidos
+    # (concurrency.cancel-in-progress es false a propósito, para no cortar un
+    # envío a medias). 5 minutos deja margen de sobra y limita el daño.
+    timeout-minutes: 5
 
     steps:
       - name: Traer el código

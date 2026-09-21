@@ -193,9 +193,17 @@ seguimiento normal: el puntero de "hasta dónde revisé" no se mueve.
 ## Preguntas que suelen salir
 
 **¿Cuánto tarda en avisar?**
-El aviso sale **apenas se cruza el umbral**, sin esperar a que la hora termine.
-Si a las 14:20 ya se ejecutaron el doble de los autodiagnósticos que suele haber
-en toda la hora de las 14:00, el mensaje sale a las 14:20, no a las 15:10.
+El programa se despierta **cada 10 minutos** (no cada hora) y revisa también la
+hora que está corriendo en ese momento, sin esperar a que cierre. Si a las 14:20
+ya se ejecutó el doble de los autodiagnósticos que suele haber en toda la hora
+de las 14:00, el aviso sale en la corrida siguiente, unos minutos después —no a
+las 15:10, que es cuando salía antes de este ajuste.
+
+En la práctica, entre el tiempo que tarda el dato en llegar a Redash (~15 min) y
+la espera hasta la próxima corrida (hasta 10 min), el aviso llega en **unos 20
+minutos en promedio, nunca más de ~25**. Antes, con el programa despertando solo
+una vez por hora, el promedio real era de ~45 minutos y el peor caso pasaba de
+una hora.
 
 Comparar una hora a medias contra lo habitual de la hora completa parece injusto,
 y justamente por eso es seguro: si a los 20 minutos ya va el doble de lo que
@@ -205,6 +213,14 @@ más por mirar datos parciales.
 El mensaje lo dice con todas las letras ("hora en curso", con el minuto de corte)
 para que nadie lea la cifra parcial como el total del pico. Se avisa **una sola
 vez por hora**: si ya salió el aviso con la hora en curso, al cerrar no se repite.
+
+**¿Por qué no revisa cada minuto, si así sería aún más rápido?**
+Cada corrida fuerza que Redash vuelva a ejecutar la consulta completa contra la
+base de datos de producción (no solo lee un caché). Cada 10 minutos ya son 6
+corridas forzadas por hora en vez de 1; bajar más el intervalo multiplicaría esa
+carga sin ganar casi nada, porque el propio dato de Redash tarda ~15 minutos en
+estar listo — ese es el verdadero piso de la velocidad, no la frecuencia del
+programa.
 
 **Si el pico dura toda la mañana, ¿llegan diez correos?**
 Sí, uno por cada hora que se dispare, y es a propósito: en una falla que escala,
