@@ -14,6 +14,7 @@ Funciones que usa el resto del chatbot:
 """
 
 import os
+import time
 
 from pydantic import BaseModel
 
@@ -138,6 +139,26 @@ def _rate_limit_real(msg: str) -> bool:
     return ("resource_exhausted" in m or "429" in m) and "limit: 0" not in m
 
 
+def _saturado(msg: str) -> bool:
+    """503 UNAVAILABLE: el modelo está congestionado, no roto.
+
+    Es muy distinto de los otros dos errores y hay que tratarlo distinto:
+    no es culpa de la cuenta (como el 429) ni del modelo elegido (como el
+    404). Es demanda pasajera del lado de Google. Dos salidas, en orden:
+    probar OTRO modelo (si Pro está lleno, Flash suele estar libre) y, si
+    están todos llenos, esperar un poco y repetir."""
+    m = msg.lower()
+    return ("unavailable" in m or "503" in m or "overloaded" in m
+            or "high demand" in m)
+
+
+# Cuántas veces se repasa la lista completa de modelos cuando TODOS salen
+# saturados, y cuánto se espera entre vueltas (se va duplicando). Son pocos
+# segundos a propósito: hay alguien mirando la pantalla, esperando.
+_VUELTAS_SI_SATURADO = 3
+_ESPERA_INICIAL_SEG = 2
+
+
 def _contenidos(user: str, historial) -> list:
     """Arma la conversación (turnos previos + pregunta actual) para Gemini."""
     contents = []
@@ -161,32 +182,61 @@ def _gemini_call(system: str, user: str, extra_config: dict, historial=None):
     config = {"system_instruction": system, "temperature": 0, **extra_config}
     contents = _contenidos(user, historial)
     ultimo_error = None
-    for modelo in orden:
-        try:
-            resp = client.models.generate_content(model=modelo, contents=contents, config=config)
-            _GEMINI_MODELO_CACHE = modelo
-            return resp
-        except Exception as e:
-            msg = str(e)
-            # Si el modelo no soporta razonamiento extendido, reintentar sin él.
-            if "thinking" in msg.lower() and "thinking_config" in config:
-                cfg2 = {k: v for k, v in config.items() if k != "thinking_config"}
-                try:
-                    resp = client.models.generate_content(
-                        model=modelo, contents=contents, config=cfg2)
-                    _GEMINI_MODELO_CACHE = modelo
-                    return resp
-                except Exception as e2:
-                    msg = str(e2)
-            if _rate_limit_real(msg):
-                raise RuntimeError(
-                    "Se alcanzó el límite de uso por el momento. "
-                    "Espera unos segundos y vuelve a preguntar."
-                ) from e
-            if _modelo_no_disponible(msg):
-                ultimo_error = e
-                continue
-            raise
+    hubo_saturado = False
+    espera = _ESPERA_INICIAL_SEG
+
+    for vuelta in range(_VUELTAS_SI_SATURADO):
+        saturados_esta_vuelta = False
+        for modelo in orden:
+            try:
+                resp = client.models.generate_content(
+                    model=modelo, contents=contents, config=config)
+                _GEMINI_MODELO_CACHE = modelo
+                return resp
+            except Exception as e:
+                msg = str(e)
+                # Si el modelo no soporta razonamiento extendido, reintentar sin él.
+                if "thinking" in msg.lower() and "thinking_config" in config:
+                    cfg2 = {k: v for k, v in config.items() if k != "thinking_config"}
+                    try:
+                        resp = client.models.generate_content(
+                            model=modelo, contents=contents, config=cfg2)
+                        _GEMINI_MODELO_CACHE = modelo
+                        return resp
+                    except Exception as e2:
+                        msg = str(e2)
+                if _rate_limit_real(msg):
+                    raise RuntimeError(
+                        "Se alcanzó el límite de uso por el momento. "
+                        "Espera unos segundos y vuelve a preguntar."
+                    ) from e
+                if _saturado(msg):
+                    # Congestionado, no roto: se prueba el siguiente modelo.
+                    saturados_esta_vuelta = True
+                    hubo_saturado = True
+                    ultimo_error = e
+                    continue
+                if _modelo_no_disponible(msg):
+                    ultimo_error = e
+                    continue
+                raise
+
+        # Si ninguno salió saturado, insistir no cambia nada: los que fallaron
+        # es porque no están en la cuenta, y eso no se arregla esperando.
+        if not saturados_esta_vuelta:
+            break
+        if vuelta < _VUELTAS_SI_SATURADO - 1:
+            time.sleep(espera)
+            espera *= 2
+
+    if hubo_saturado:
+        raise RuntimeError(
+            "Google Gemini está saturado en este momento (error 503). No es un "
+            "problema de tu pregunta ni de la configuración del chatbot: su "
+            "servicio está recibiendo más demanda de la que puede atender. "
+            "Ya se reintentó con los modelos disponibles. Vuelve a preguntar "
+            "en un minuto."
+        ) from ultimo_error
     raise RuntimeError(
         "No encontré un modelo de Gemini disponible en tu cuenta. "
         f"Fija GEMINI_MODEL con uno válido. Último detalle: {ultimo_error}"
