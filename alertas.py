@@ -927,9 +927,9 @@ def correo_de_prueba() -> tuple[str, str, str]:
         "salido 57 avisos, y en 6 de cada 10 dias no habria llegado ninguno.\n\n"
         "Cada aviso trae cuantos fueron, que falla predomino, en que ciudad se "
         "concentro y por que canal entraron.\n\n"
-        "Si un pico se alarga varias horas, tampoco llega un correo por hora: "
-        f"llega el primero y despues un recordatorio cada {cada} horas mientras "
-        "siga.\n\n"
+        "Si un pico se alarga varias horas, cada hora en alerta se avisa por "
+        "separado: en una falla que escala, como crece hora a hora es parte "
+        "de la informacion.\n\n"
         "-- \nEste es un correo de prueba: no hay ningun pico en curso."
     )
     html = f"""<!doctype html>
