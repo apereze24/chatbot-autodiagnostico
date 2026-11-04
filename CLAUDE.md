@@ -62,9 +62,10 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
    - El último día con datos está en curso, así que se compara solo el tramo de
      horas ya transcurrido (si no, un día a medias parecería una caída).
 
-6. **Alerta (`alertas.py` + `.github/workflows/`):** revisa **cada 10 minutos**
-   (`cron: "3,13,23,33,43,53 * * * *"`) las **últimas 6 horas completas más la
-   hora en curso**, y avisa cada vez que encuentra un pico, por
+6. **Alerta (`alertas.py` + `.github/workflows/`):** revisa **cada 2 minutos**
+   (disparada desde **cron-job.org** vía `workflow_dispatch`; ver abajo) las
+   **últimas 6 horas completas más la hora en curso**, leyendo las tablas **en
+   vivo**, y avisa cada vez que encuentra un pico, por
    **Google Chat** (`CHAT_WEBHOOK_URL`) y/o correo. Corre en **GitHub Actions**,
    no dentro de la app: una app de Streamlit solo se ejecuta cuando alguien tiene
    la página abierta, así que no puede vigilar nada por su cuenta.
@@ -77,7 +78,41 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
      corte, para que nadie lea la cifra parcial como el total.
      Solo se avisa UNA vez por hora: si se avisó en curso, al cerrar no se
      repite (la lista de horas avisadas no distingue parcial de completa).
-   - **El cron cada 10 min es lo que de verdad hace "inmediato" al aviso.**
+   - **El cron de GitHub NO sirve como reloj, y está medido.** Configurado
+     cada 10 min, GitHub lo ejecutó 4–7 veces al día (mediana 262 min entre
+     corridas, huecos de hasta 10 h). El 30-oct-2026 eso dejó sin avisar el pico
+     de las 05:00 y avisó el de las 06:00 a las 12:58. Ningún ajuste de código lo
+     arregla. Por eso el disparador principal es **externo**: cron-job.org llama
+     cada 2 min a la API `…/actions/workflows/alerta-autodiagnostico.yml/dispatches`
+     con un token fine-grained (solo *Actions: write* en este repo). Las
+     peticiones `workflow_dispatch` GitHub sí las atiende al instante. El
+     `schedule` queda solo como respaldo. Pasos en `ALERTA-CORREO.md`; el token
+     vence, ver `MANTENIMIENTO.md`. Hogar ideal a futuro: un cron en un servidor
+     de TI corriendo el mismo `python alertas.py`.
+   - **Lee en vivo, no la vista materializada.** La consulta guardada del chatbot
+     lee `analytics.mv_auto_diagnostic_full` (materializada, ~30 min de atraso
+     medido). La alerta corre SQL directo (`redash.consultar_sql`, fuente
+     `REDASH_DATA_SOURCE_ID=4`, etlhub) sobre las tablas foráneas `sysbrazo.*`,
+     que leen producción al instante. En dos pasos, para no cargar producción:
+     `CONSULTA_FECHAS` (~3 s, solo `started_at`) en cada corrida, y
+     `CONSULTA_DETALLE` (~14 s, con causa/ciudad/canal) **solo si hay pico**. El
+     detalle replica exactamente `analytics.mv_auto_diagnostic_runs_base`
+     (ciudad = `client_address.locality`; causa = `details->>'reason'` del primer
+     paso failed/canceled de `auto_diagnostic_run_steps`); verificado registro a
+     registro sobre 14 días: 100% de coincidencia. Si la lectura en vivo falla,
+     cae a la consulta guardada (`_plan_b`) en vez de quedarse ciega.
+     Reproducir un día viejo (`--dia/--hora`) usa la consulta guardada, porque
+     la consulta en vivo solo trae 17 días.
+   - Detección medida contra el 30-oct real: con dato en vivo la regla detecta
+     el pico de las 05:00 a las 05:36 (empezó ~05:30) y el de las 06:00 a las
+     06:04. La regla nunca fue el problema.
+   - **Pruebas de carga excluidas** (`source = 'load_test'`): en `redash._normalizar`
+     (chatbot, termómetro y plan B) y en las consultas en vivo. El 30-oct hubo
+     una de 500 corridas que salió como "pico" de las 09:00.
+   - La memoria de avisos (`actions/cache`) se guarda solo si cambió: con
+     corridas cada 2 min, guardarla siempre crearía ~720 copias al día.
+   - **Antes: el cron cada 10 min "debía" hacer inmediato el aviso** (no lo
+     hizo, ver arriba). Nota histórica del razonamiento:
      Revisar la hora en curso no sirve de nada si el programa solo se despierta
      una vez por hora: en el peor caso seguía tardando ~74 min en avisar de un
      pico que arrancó al principio de su hora (simulado). Con el cron cada 10
@@ -86,7 +121,7 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
      acortar. `timeout-minutes` bajó de 15 a 5: con corridas cada 10 min, una
      que se cuelga bloquearía varios ciclos seguidos (`concurrency` las hace
      esperar en fila, no las corre en paralelo).
-   - **Costo real: 6× más refrescos forzados de Redash por hora** (uno por
+   - (Histórico) **Costo con la versión anterior: 6× más refrescos forzados de Redash por hora** (uno por
      corrida, `ALERTA_REFRESCAR_REDASH=1` por defecto), porque cada corrida
      dispara una ejecución nueva de la consulta contra la base de producción,
      no solo lee el caché. Antes era 1 corrida forzada por hora; ahora son 6.

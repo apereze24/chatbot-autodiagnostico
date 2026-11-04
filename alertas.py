@@ -250,6 +250,101 @@ def horas_a_revisar(serie_fechas: pd.Series) -> list[pd.Timestamp]:
     return horas
 
 
+# --- De dónde salen los datos ------------------------------------------------
+# La alerta lee las tablas EN VIVO, no la consulta guardada del chatbot. Esa
+# consulta lee la vista materializada analytics.mv_auto_diagnostic_full, que se
+# refresca cada cierto tiempo: se midió ~30 min de atraso, y con eso es imposible
+# avisar a los 5 minutos de un pico. Las tablas sysbrazo.* son foráneas: leen la
+# base de producción al instante.
+#
+# Para no cargar producción, va en dos pasos. En cada corrida, solo las fechas
+# (~3 s): con eso se decide si hay pico. Solo si lo hay, el detalle para
+# explicarlo (~14 s). Las columnas replican EXACTAMENTE cómo las arma la vista
+# materializada (analytics.mv_auto_diagnostic_runs_base); se verificó registro a
+# registro sobre 14 días: coinciden el 100% en canal, causa y ciudad.
+DIAS_EN_VIVO = analisis.DIAS_BASE + 3   # la base de 14 días + hoy + margen
+
+# Las corridas de prueba de carga (source = 'load_test') no son clientes: el
+# 30-oct-2026 una de 500 corridas apareció como "pico" de las 09:00.
+SIN_PRUEBAS = "COALESCE(source, '') <> 'load_test'"
+
+CONSULTA_FECHAS = f"""
+SELECT id, started_at
+FROM sysbrazo.auto_diagnostic_runs
+WHERE started_at >= NOW() - INTERVAL '{DIAS_EN_VIVO} days'
+  AND {SIN_PRUEBAS}
+"""
+
+CONSULTA_DETALLE = f"""
+WITH runs AS (
+    SELECT r.id, r.client_id, r.source, r.status, r.started_at
+    FROM sysbrazo.auto_diagnostic_runs r
+    WHERE r.started_at >= NOW() - INTERVAL '{DIAS_EN_VIVO} days'
+      AND {SIN_PRUEBAS}
+),
+fallas AS (
+    -- Igual que la vista: la causa es la del primer paso que falló o se canceló.
+    SELECT DISTINCT ON (s.run_id) s.run_id, s.details ->> 'reason' AS failure_reason
+    FROM sysbrazo.auto_diagnostic_run_steps s
+    WHERE s.run_id IN (SELECT id FROM runs)
+      AND s.status::text IN ('failed', 'canceled')
+    ORDER BY s.run_id, s.step_number
+),
+ciudad AS (
+    SELECT DISTINCT ON (client_id) client_id, locality
+    FROM analytics.client_address
+    WHERE client_id IS NOT NULL
+    ORDER BY client_id
+)
+SELECT r.id, r.started_at, r.status, r.source, f.failure_reason,
+       c.locality AS nombre_ciudad
+FROM runs r
+LEFT JOIN fallas f ON f.run_id = r.id
+LEFT JOIN ciudad c ON c.client_id = r.client_id
+"""
+
+
+def _en_vivo(sql: str) -> pd.DataFrame:
+    return redash.consultar_sql(sql, _entero("REDASH_DATA_SOURCE_ID", 4), timeout_seg=180)
+
+
+def _plan_b() -> pd.DataFrame:
+    """Si la lectura en vivo falla, la alerta NO se queda ciega: usa la consulta
+    guardada de siempre, refrescada. Avisa con más atraso, pero avisa."""
+    print("  >>> No pude leer en vivo. Uso la consulta guardada (con más atraso).")
+    return redash.obtener_datos(
+        refrescar=_texto("ALERTA_REFRESCAR_REDASH", "1") == "1", timeout_seg=240)
+
+
+def datos_para_vigilar() -> tuple[pd.DataFrame, bool]:
+    """Paso rápido. Devuelve (datos, ya_tiene_el_detalle)."""
+    print("Trayendo las fechas en vivo (paso rápido)…")
+    try:
+        return _en_vivo(CONSULTA_FECHAS), False
+    except Exception as e:
+        print(f"  ERROR leyendo en vivo: {type(e).__name__}: {e}")
+        return _plan_b(), True
+
+
+def datos_detallados() -> pd.DataFrame:
+    """Paso completo: solo se pide cuando hay un pico que explicar."""
+    try:
+        return _en_vivo(CONSULTA_DETALLE)
+    except Exception as e:
+        print(f"  ERROR trayendo el detalle en vivo: {type(e).__name__}: {e}")
+        return _plan_b()
+
+
+def hay_pico(serie_fechas: pd.Series, momento: pd.Timestamp) -> bool:
+    """La misma pregunta que hace armar_resumen, pero solo con las fechas."""
+    dia, hora = momento.date(), int(momento.hour)
+    a = analisis.analizar(serie_fechas, dia, serie_fechas.max().date())
+    if not a["hay_base"]:
+        return False
+    return analisis.es_pico(int(a["conteo"][hora]), float(a["habitual"][hora]),
+                            a["previos"][hora])
+
+
 def atraso_del_dato(serie_fechas: pd.Series) -> dt.timedelta:
     """Cuánto tiempo pasó desde el último autodiagnóstico registrado."""
     ahora = (dt.datetime.now(dt.UTC).replace(tzinfo=None)
@@ -942,13 +1037,13 @@ def main(argv=None) -> int:
         return 0 if any(resultados.values()) else 1
 
     forzado = bool(args.dia or args.hora is not None)
-    # Con _texto y no con os.environ.get: si alguien crea el secret vacío, el
-    # refresco se apagaría en silencio y la alerta quedaría mirando datos de ayer.
-    refrescar = _texto("ALERTA_REFRESCAR_REDASH", "1") == "1" and not forzado
-
-    print("Trayendo los datos de Redash"
-          + (" (forzando una corrida nueva)…" if refrescar else " (resultado en caché)…"))
-    df = redash.obtener_datos(refrescar=refrescar, timeout_seg=240)
+    if forzado:
+        # Reproducir una hora concreta puede ser de hace meses, y eso solo lo
+        # tiene la consulta guardada (todo el histórico). Basta su caché.
+        print("Trayendo el histórico de Redash (resultado en caché)…")
+        df, completo = redash.obtener_datos(refrescar=False, timeout_seg=240), True
+    else:
+        df, completo = datos_para_vigilar()
     serie = analisis.fechas_validas(df, COL_FECHA)
     if serie.empty:
         print("No hay datos con fecha. No hay nada que revisar.")
@@ -981,6 +1076,21 @@ def main(argv=None) -> int:
           + ", ".join(t.strftime("%d/%m %H:00") for t in aRevisar))
     if avisadas:
         print(f"Ya avisadas antes: {len(avisadas)} horas en memoria")
+
+    if not completo:
+        # El paso rápido solo trae fechas: alcanza para saber si hay pico, no
+        # para explicarlo. El detalle (causa, ciudad, canal) se pide únicamente
+        # cuando hace falta, para no cargar la base de producción en cada corrida.
+        pendientes = [m for m in aRevisar
+                      if (args.ignorar_estado or clave_hora(m) not in avisadas)
+                      and hay_pico(serie, m)]
+        if not pendientes:
+            print("\nNinguna hora de la ventana es pico. No hay nada que avisar.")
+            return 0
+        print("\nPico en: " + ", ".join(m.strftime("%d/%m %H:00") for m in pendientes)
+              + ". Trayendo el detalle para explicarlo…")
+        df = datos_detallados()
+        aRevisar = pendientes
 
     hubo_fallo = False
     for momento in aRevisar:

@@ -49,6 +49,68 @@ Por eso va como secret y no en el código.
 
 ---
 
+## El disparador: lo que hace que el aviso llegue en minutos
+
+**Sin esto la alerta no es puntual.** El cron propio de GitHub no sirve para
+avisar a tiempo: configurado cada 10 minutos, GitHub lo ejecutó entre 4 y 7
+veces al día (en promedio una vez cada ~4 horas, con huecos de hasta 10).
+
+La solución es que un servicio externo, **cron-job.org** (gratis), le pida a
+GitHub que corra la alerta cada 2 minutos. Esas peticiones GitHub sí las atiende
+al instante.
+
+### Paso 1: crear el permiso (token) en GitHub
+
+1. En GitHub, arriba a la derecha: tu foto → **Settings**.
+2. Al final del menú izquierdo: **Developer settings** → **Personal access
+   tokens** → **Fine-grained tokens** → **Generate new token**.
+3. Llenar así:
+   - **Token name:** `disparador-alerta-autodiagnostico`
+   - **Expiration:** *Custom* → un año desde hoy. **Anotar la fecha en
+     `MANTENIMIENTO.md`**: cuando vence, la alerta deja de ser puntual.
+   - **Repository access:** *Only select repositories* → `chatbot-autodiagnostico`.
+   - **Repository permissions → Actions:** *Read and write*. Nada más.
+4. **Generate token** y copiarlo (empieza por `github_pat_`). Solo se ve una vez.
+
+Ese token solo puede lanzar y ver las corridas de este repositorio: no lee los
+secrets ni cambia el código. Aun así es una credencial: va solo en cron-job.org,
+nunca en un chat ni en el código.
+
+### Paso 2: programar el disparo en cron-job.org
+
+1. Crear una cuenta gratis en https://cron-job.org (mejor con un correo del
+   equipo que con uno personal).
+2. **Create cronjob**:
+   - **Title:** `Alerta autodiagnóstico`
+   - **URL:**
+     `https://api.github.com/repos/apereze24/chatbot-autodiagnostico/actions/workflows/alerta-autodiagnostico.yml/dispatches`
+   - **Execution schedule:** *Every 2 minutes*.
+   - **Notifications:** activar el aviso cuando la ejecución **falle**. Así, si
+     el disparador se cae, alguien se entera.
+3. Pestaña **Advanced**:
+   - **Request method:** `POST`
+   - **Headers:**
+     - `Authorization`: `Bearer ` seguido del token del paso 1
+     - `Accept`: `application/vnd.github+json`
+     - `X-GitHub-Api-Version`: `2022-11-28`
+     - `Content-Type`: `application/json`
+   - **Request body:** `{"ref":"main"}`
+4. Guardar y usar **Test run**. La respuesta correcta es **204**.
+
+### Paso 3: comprobar
+
+En GitHub → **Actions** → *Alerta de picos de autodiagnóstico* deben aparecer
+corridas nuevas cada 2 minutos, marcadas como **workflow_dispatch**, de unos 30
+segundos cada una. Si el registro dice "Ninguna hora de la ventana es pico", está
+bien: revisó y no había nada que avisar.
+
+> **Si algún día TI ofrece un servidor de la empresa**, ese es el hogar más
+> robusto: un cron del servidor corriendo `python alertas.py` cada 2 minutos hace
+> exactamente lo mismo, sin depender de GitHub ni de cron-job.org. El programa no
+> necesita cambios.
+
+---
+
 ## Qué hace, en una frase
 
 Cada hora, un programa revisa la última hora completa de datos. Si en esa hora se
@@ -193,17 +255,17 @@ seguimiento normal: el puntero de "hasta dónde revisé" no se mueve.
 ## Preguntas que suelen salir
 
 **¿Cuánto tarda en avisar?**
-El programa se despierta **cada 10 minutos** (no cada hora) y revisa también la
-hora que está corriendo en ese momento, sin esperar a que cierre. Si a las 14:20
-ya se ejecutó el doble de los autodiagnósticos que suele haber en toda la hora
-de las 14:00, el aviso sale en la corrida siguiente, unos minutos después —no a
-las 15:10, que es cuando salía antes de este ajuste.
+**Menos de 5 minutos** desde que se cruza el umbral, siempre que el disparador
+de cron-job.org esté funcionando (ver "El disparador"). Hay tres piezas:
 
-En la práctica, entre el tiempo que tarda el dato en llegar a Redash (~15 min) y
-la espera hasta la próxima corrida (hasta 10 min), el aviso llega en **unos 20
-minutos en promedio, nunca más de ~25**. Antes, con el programa despertando solo
-una vez por hora, el promedio real era de ~45 minutos y el peor caso pasaba de
-una hora.
+- La alerta corre **cada 2 minutos**, lanzada por cron-job.org.
+- Lee las tablas **en vivo** (`sysbrazo.*`), no la vista materializada del
+  chatbot, que tiene ~30 minutos de atraso.
+- Revisa también la hora en curso, sin esperar a que cierre.
+
+Probado contra el 30 de octubre de 2026: el pico que empezó hacia las 05:30 se
+detecta a las 05:36, y el de las 06:00 a las 06:04. Ese día, con el sistema
+anterior, el primero nunca se avisó y el segundo llegó a las 12:58.
 
 Comparar una hora a medias contra lo habitual de la hora completa parece injusto,
 y justamente por eso es seguro: si a los 20 minutos ya va el doble de lo que

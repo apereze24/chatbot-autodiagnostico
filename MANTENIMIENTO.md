@@ -43,14 +43,31 @@ la pestaña **Actions** del repositorio y mira la lista de corridas:
 
 | Lo que ves | Qué significa |
 |---|---|
-| Corridas recientes que dicen **Scheduled**, con visto verde | Todo bien. Es lo esperado. |
+| Corridas cada ~2 minutos que dicen **workflow_dispatch**, con visto verde | Todo bien. Es el disparador de cron-job.org. |
+| Solo aparecen corridas **Scheduled**, unas pocas al día | El disparador externo se cayó: la alerta sigue viva pero **ya no avisa a tiempo**. Revisa cron-job.org y el token (abajo). |
 | La última corrida es de hace días o semanas | La tarea se desactivó. Ver abajo cómo reactivarla. |
 | Un aviso amarillo diciendo que el workflow está deshabilitado | Confirmado: se desactivó. |
 | Corridas en rojo | Está corriendo pero algo falla. Abre la corrida y lee el último paso. |
 
-Ojo: las corridas programadas de GitHub **pueden retrasarse** algunos minutos, y
-en horas de mucha carga hasta media hora. Que una hora no aparezca exactamente al
-minuto 10 no es un problema.
+Las corridas **Scheduled** son solo un respaldo: GitHub las ejecuta pocas veces
+al día y no garantizan avisos a tiempo. Lo que hace puntual a la alerta es el
+disparador de cron-job.org (instrucciones en `ALERTA-CORREO.md`).
+
+## El token del disparador vence
+
+El disparador de cron-job.org usa un token de GitHub con fecha de vencimiento.
+**Cuando vence, cron-job.org empieza a fallar y la alerta vuelve a avisar con
+horas de atraso**, sin que el programa falle. Si en cron-job.org activaste el
+aviso de fallas, te llegará un correo. Para renovarlo:
+
+1. GitHub → foto → **Settings** → **Developer settings** → **Personal access
+   tokens** → **Fine-grained tokens** → `disparador-alerta-autodiagnostico` →
+   **Regenerate token**, con un año más.
+2. Copia el token nuevo y pégalo en cron-job.org, en el encabezado
+   `Authorization` (`Bearer ` + token). Guarda y haz **Test run**: debe dar 204.
+3. Anota la nueva fecha de vencimiento en la bitácora de abajo.
+
+**Vencimiento actual del token:** _(anotar al crearlo)_
 
 ## Si ya se desactivó: cómo reactivarla
 
@@ -77,4 +94,5 @@ Agrega una línea cada vez. La más reciente arriba.
 
 | Fecha | Quién | Notas |
 |---|---|---|
+| 2026-11-04 | Alejandro | La alerta pasa a leer en vivo y a dispararse cada 2 min desde cron-job.org. Falta anotar el vencimiento del token. |
 | 2026-10-13 | Alejandro | Alerta puesta en marcha y verificada desde Actions. |

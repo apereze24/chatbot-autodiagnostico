@@ -65,6 +65,12 @@ def _normalizar(df: pd.DataFrame) -> pd.DataFrame:
     """Convierte fechas a tipo fecha (en hora local) y agrega columnas numéricas."""
     if df.empty:
         return df
+    # Las pruebas de carga no son clientes. Se quitan aquí, en el único punto por
+    # donde pasan todos (chatbot, termómetro y alerta), para que ninguno cuente
+    # algo que los otros no. El 30-oct-2026 una prueba de 500 corridas apareció
+    # como "pico" de las 09:00 y habría sido una alerta falsa al equipo de CX.
+    if "source" in df.columns:
+        df = df[df["source"].fillna("").astype(str) != "load_test"].reset_index(drop=True)
     desfase = pd.Timedelta(hours=horas_a_local())
     for c in _COLS_FECHA:
         if c in df.columns:
@@ -122,10 +128,16 @@ def obtener_datos(refrescar: bool = False, timeout_seg: int = 120) -> pd.DataFra
         # Algunas versiones devuelven el resultado directo.
         return _a_dataframe(cuerpo)
 
-    esperado = 0
+    return _esperar_resultado(url, key, job_id, timeout_seg)
+
+
+def _esperar_resultado(url: str, key: str, job_id: str, timeout_seg: int,
+                       pausa: float = 2) -> pd.DataFrame:
+    """Espera a que Redash termine de correr una consulta y trae el resultado."""
+    esperado = 0.0
     while esperado < timeout_seg:
-        time.sleep(2)
-        esperado += 2
+        time.sleep(pausa)
+        esperado += pausa
         jr = requests.get(f"{url}/api/jobs/{job_id}", headers=_headers(key), timeout=60)
         jr.raise_for_status()
         j = jr.json().get("job", {})
@@ -134,7 +146,7 @@ def obtener_datos(refrescar: bool = False, timeout_seg: int = 120) -> pd.DataFra
             result_id = j.get("query_result_id")
             rr = requests.get(
                 f"{url}/api/query_results/{result_id}.json",
-                headers=_headers(key), timeout=60,
+                headers=_headers(key), timeout=120,
             )
             rr.raise_for_status()
             return _a_dataframe(rr.json())
@@ -142,3 +154,25 @@ def obtener_datos(refrescar: bool = False, timeout_seg: int = 120) -> pd.DataFra
             raise RuntimeError(f"La consulta falló en Redash: {j.get('error')}")
 
     raise RuntimeError("La actualización tardó demasiado. Intenta de nuevo en un momento.")
+
+
+def consultar_sql(sql: str, data_source_id: int, timeout_seg: int = 120) -> pd.DataFrame:
+    """Corre una consulta SQL directa (no una consulta guardada) en una fuente de Redash.
+
+    La usa la alerta para leer las tablas en vivo. La consulta guardada que
+    alimenta el chatbot lee una vista materializada que se refresca cada cierto
+    tiempo (se midió ~30 min de atraso), y con eso no se puede avisar de un pico
+    a los pocos minutos. Requiere que la API key sea de un usuario con permiso
+    para correr consultas en esa fuente, no la key de una consulta puntual."""
+    url, _, key = _cfg()
+    if not (url and key):
+        raise RuntimeError("Falta configurar REDASH_URL y REDASH_API_KEY.")
+    r = requests.post(
+        f"{url}/api/query_results", headers=_headers(key), timeout=60,
+        json={"query": sql, "data_source_id": int(data_source_id), "max_age": 0},
+    )
+    r.raise_for_status()
+    cuerpo = r.json()
+    if "query_result" in cuerpo:
+        return _a_dataframe(cuerpo)
+    return _esperar_resultado(url, key, cuerpo["job"]["id"], timeout_seg, pausa=1)

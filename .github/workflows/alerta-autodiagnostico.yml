@@ -1,38 +1,37 @@
-# Revisa cada hora si los autodiagnósticos se dispararon y, si sí, manda correo
-# al equipo de CX.
+# Revisa si los autodiagnósticos se dispararon y, si sí, avisa al equipo de CX
+# por Google Chat y por correo.
 #
 # ¿Por qué aquí y no dentro de la app? Porque la app de Streamlit solo se ejecuta
 # cuando alguien tiene la página abierta. Si nadie la abre, no habría alerta. Esto
 # corre solo en los servidores de GitHub, con la página cerrada.
 #
+# QUIÉN LA DISPARA (importante, leer antes de tocar el cron):
+#   El disparador principal es EXTERNO: un servicio de cron (cron-job.org) llama
+#   cada 2 minutos a la API de GitHub para lanzar este workflow
+#   (workflow_dispatch). Ver ALERTA-CORREO.md, sección "Disparador".
+#
+#   El cron de GitHub de abajo NO sirve para esto y se deja solo como respaldo.
+#   Se midió: configurado cada 10 minutos, GitHub lo ejecutó 4 a 7 veces AL DÍA
+#   (mediana de 262 minutos entre corridas, huecos de hasta 10 horas). Es "best
+#   effort" y en repositorios gratuitos lo recorta muchísimo. El 30-oct-2026 eso
+#   dejó sin avisar el pico de las 05:00 y avisó el de las 06:00 a las 12:58.
+#
 # ANTES DE QUE FUNCIONE hay que crear los "secrets" del repositorio en:
 #   GitHub -> el repo -> Settings -> Secrets and variables -> Actions -> New secret
-# Obligatorios: REDASH_URL, REDASH_QUERY_ID, REDASH_API_KEY,
-#               SMTP_USUARIO, SMTP_CLAVE
-# Opcionales:   SMTP_HOST, SMTP_PORT, ALERTA_DESTINATARIOS, ALERTA_URL_APP
+# Obligatorios: REDASH_URL, REDASH_QUERY_ID, REDASH_API_KEY (de un usuario que
+#               pueda correr consultas en etlhub), CHAT_WEBHOOK_URL y/o
+#               SMTP_USUARIO + SMTP_CLAVE, ALERTA_DESTINATARIOS
+# Opcionales:   SMTP_HOST, SMTP_PORT, ALERTA_REMITENTE, ALERTA_URL_APP
 
 name: Alerta de picos de autodiagnóstico
 
 on:
   schedule:
-    # CADA 10 MINUTOS, no cada hora. Esto es lo que hace que el aviso sea
-    # inmediato, y va de la mano con que alertas.py revise la hora EN CURSO:
-    # de nada sirve poder leer una hora a medias si el programa solo se
-    # despierta una vez por hora.
-    #
-    # Con el cron horario, un pico que arrancaba al minuto 5 se avisaba 65
-    # minutos después (promedio 44 min, peor caso 74). Cada 10 minutos el
-    # promedio baja a ~20 min y el peor caso a ~24.
-    #
-    # El piso son ~15 minutos y no se puede bajar de ahí desde aquí: es lo que
-    # tarda el dato en aparecer en Redash. Por eso no se pone cada 5 minutos,
-    # que duplicaría la carga sobre Redash sin ganar casi nada.
-    #
-    # Los minutos son 3,13,23... y no 0,10,20... a propósito: GitHub retrasa
-    # las tareas programadas cuando hay mucha carga, y los minutos redondos
-    # (sobre todo el 0) son los más congestionados.
+    # Solo respaldo (ver arriba): si el disparador externo se cae, esto al
+    # menos corre algunas veces al día. No da tiempos de aviso garantizados.
     - cron: "3,13,23,33,43,53 * * * *"
-  # Permite lanzarla a mano desde la pestaña Actions, para probar.
+  # El disparador principal (cron-job.org) llega por aquí. También permite
+  # lanzarla a mano desde la pestaña Actions, para probar.
   workflow_dispatch:
     inputs:
       modo:
@@ -41,7 +40,7 @@ on:
         default: revisar
         options:
           - revisar         # lo normal: mira si hay pico y avisa solo si lo hay
-          - probar-envio    # manda un correo de prueba para comprobar el envío
+          - probar-envio    # manda un aviso de prueba para comprobar el envío
       solo_a:
         description: "Solo para probar-envio: a qué correo enviarlo. Si se deja vacío, va a TODO el equipo."
         required: false
@@ -55,7 +54,8 @@ on:
         required: false
         type: string
 
-# Si una corrida se demora, que la siguiente espere en vez de solaparse.
+# Una corrida a la vez. Si llega otra mientras una está en curso, espera.
+# No se cancela la que está corriendo para no cortar un envío a medias.
 concurrency:
   group: alerta-autodiagnostico
   cancel-in-progress: false
@@ -63,12 +63,9 @@ concurrency:
 jobs:
   revisar:
     runs-on: ubuntu-latest
-    # Una corrida normal tarda ~40 s (instalar + revisar). Antes el tope eran
-    # 15 min, que no importaba con un cron horario; ahora que el cron es cada
-    # 10 min, una corrida que se cuelga bloquearía varios ciclos seguidos
-    # (concurrency.cancel-in-progress es false a propósito, para no cortar un
-    # envío a medias). 5 minutos deja margen de sobra y limita el daño.
-    timeout-minutes: 5
+    # Una corrida normal tarda ~30 s. Con el disparador cada 2 min, una que se
+    # cuelga bloquearía los ciclos siguientes; 4 minutos limita el daño.
+    timeout-minutes: 4
 
     steps:
       - name: Traer el código
@@ -85,23 +82,29 @@ jobs:
         run: pip install -r requirements-alertas.txt
 
       # Memoria de qué horas ya se avisaron, para no repetir el mismo aviso.
-      # Si esta caché no restaura, la alerta NO se pierde: cada corrida repasa
-      # la ventana completa de horas recientes, así que en el peor caso repite
-      # un aviso en vez de callarlo. Antes no era así, y por eso se perdieron
-      # los picos del 28-ago.
+      # Si no restaura, la alerta NO se pierde: cada corrida repasa la ventana
+      # completa de horas recientes, así que en el peor caso repite un aviso en
+      # vez de callarlo.
       - name: Recuperar el registro de avisos ya enviados
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .alerta_estado.json
           key: alerta-estado-${{ github.run_id }}
           restore-keys: |
             alerta-estado-
 
-      - name: Revisar la última hora completa y avisar si hay pico
+      - name: Anotar cómo estaba la memoria
+        id: antes
+        run: echo "huella=$(sha256sum .alerta_estado.json 2>/dev/null | cut -c1-64)" >> "$GITHUB_OUTPUT"
+
+      - name: Revisar y avisar si hay pico
         env:
           REDASH_URL: ${{ secrets.REDASH_URL }}
           REDASH_QUERY_ID: ${{ secrets.REDASH_QUERY_ID }}
           REDASH_API_KEY: ${{ secrets.REDASH_API_KEY }}
+          # Fuente de Redash donde viven las tablas en vivo (etlhub). No es
+          # secreto: es un número de catálogo, no da acceso por sí solo.
+          REDASH_DATA_SOURCE_ID: "4"
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USUARIO: ${{ secrets.SMTP_USUARIO }}
@@ -112,7 +115,7 @@ jobs:
           # Espacio de Google Chat donde publicar el aviso. Es un canal aparte
           # del correo: si uno falla, el otro sigue avisando.
           CHAT_WEBHOOK_URL: ${{ secrets.CHAT_WEBHOOK_URL }}
-          # Lo que se eligió al lanzarla a mano. En las corridas programadas
+          # Lo que se eligió al lanzarla a mano. En las corridas automáticas
           # llegan vacíos, así que cae en el modo normal.
           # Van por env y no dentro del run para que un texto escrito a mano no
           # pueda inyectar comandos en el script.
@@ -143,3 +146,19 @@ jobs:
           else
             python alertas.py
           fi
+
+      # Solo se guarda si la memoria cambió (es decir, si salió un aviso). Con
+      # corridas cada 2 minutos, guardarla siempre crearía ~720 copias al día.
+      # Va con always() para no perder un aviso ya enviado aunque otro canal
+      # haya fallado en la misma corrida.
+      - name: Ver si la memoria cambió
+        id: despues
+        if: always()
+        run: echo "huella=$(sha256sum .alerta_estado.json 2>/dev/null | cut -c1-64)" >> "$GITHUB_OUTPUT"
+
+      - name: Guardar el registro de avisos
+        if: always() && steps.despues.outputs.huella != '' && steps.despues.outputs.huella != steps.antes.outputs.huella
+        uses: actions/cache/save@v4
+        with:
+          path: .alerta_estado.json
+          key: alerta-estado-${{ github.run_id }}
