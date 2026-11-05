@@ -144,6 +144,14 @@ y gráficos. Usuario (aperez@fibrazo.com) **no técnico** → explicar simple, p
      el refresco.
    - Si el dato viene con más de `ALERTA_MAX_ATRASO_HORAS` (6) de atraso, no
      envía: sería avisar de algo ya pasado.
+   - **Regla de mensajes: un aviso por hora con pico + un resumen al cierre.**
+     La hora con pico se avisa UNA vez, al detectarse. Cuando termina (3 min de
+     margen), sale UN mensaje de cierre con el total final de la hora, y nada
+     más sobre esa hora. La memoria guarda `avisadas` y `cerradas`.
+     Error real del 5-nov-2026: `revisar_hora` devolvía `0` en vez de
+     `"avisado"` al entregar, así que la hora nunca quedaba marcada; con el
+     disparador cada 2 min el mismo pico se avisó decenas de veces. Antes no se
+     notaba porque GitHub corría la alerta ~5 veces al día.
    - **Sin anti-spam, a propósito.** Cada hora en alerta se avisa por separado:
      en una falla que escala, cómo crece hora a hora es información. Hubo una
      regla que silenciaba horas seguidas y causó una falla real (28-ago-2026:

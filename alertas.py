@@ -401,12 +401,12 @@ def avisadas_de(estado: dict) -> set[str]:
     return set(valores) if isinstance(valores, list) else set()
 
 
-def estado_guardar(avisadas: set[str]) -> None:
-    """Guarda las horas ya avisadas, quedándose con las más recientes."""
+def estado_guardar(avisadas: set[str], cerradas: set[str]) -> None:
+    """Guarda las horas ya avisadas y las ya resumidas al cierre."""
     try:
-        recientes = sorted(avisadas)[-MAXIMO_RECORDADAS:]
-        ARCHIVO_ESTADO.write_text(json.dumps({"avisadas": recientes}),
-                                  encoding="utf-8")
+        datos = {"avisadas": sorted(avisadas)[-MAXIMO_RECORDADAS:],
+                 "cerradas": sorted(cerradas)[-MAXIMO_RECORDADAS:]}
+        ARCHIVO_ESTADO.write_text(json.dumps(datos), encoding="utf-8")
     except Exception as e:  # en el peor caso se repite un aviso, no se pierde
         print(f"  (no pude guardar el registro de avisos: {e})")
 
@@ -973,6 +973,106 @@ def correo_de_prueba() -> tuple[str, str, str]:
 
 
 # --- Programa ----------------------------------------------------------------
+# --- Cierre de una hora que tuvo pico ---------------------------------------
+# Regla de mensajes: una hora con pico se avisa UNA vez, cuando se detecta. Al
+# terminar esa hora sale UN resumen de cómo cerró. Nada más sobre esa hora.
+MARGEN_CIERRE = dt.timedelta(minutes=3)   # los últimos registros llegan tarde
+
+
+def _ahora_local() -> dt.datetime:
+    return (dt.datetime.now(dt.UTC).replace(tzinfo=None)
+            + dt.timedelta(hours=analisis.horas_a_local()))
+
+
+def cerradas_de(estado: dict) -> set[str]:
+    valores = estado.get("cerradas")
+    return set(valores) if isinstance(valores, list) else set()
+
+
+def horas_por_cerrar(avisadas: set[str], cerradas: set[str]) -> list[pd.Timestamp]:
+    """Horas avisadas que ya terminaron y aún no tienen su resumen (últimas 24 h)."""
+    ahora = _ahora_local()
+    salida = []
+    for clave in sorted(avisadas - cerradas):
+        try:
+            momento = pd.Timestamp(dt.datetime.strptime(clave, "%Y-%m-%dT%H"))
+        except ValueError:
+            continue
+        fin = momento + pd.Timedelta(hours=1)
+        if fin + MARGEN_CIERRE <= ahora and ahora - fin <= dt.timedelta(hours=24):
+            salida.append(momento)
+    return salida
+
+
+def avisar_cierre(serie_fechas: pd.Series, momento: pd.Timestamp,
+                  destinos: list[str], args) -> bool:
+    """Resume cómo terminó una hora con pico. True si salió (o modo prueba)."""
+    dia, hora = momento.date(), int(momento.hour)
+    a = analisis.analizar(serie_fechas, dia, serie_fechas.max().date())
+    casos = int(a["conteo"][hora])
+    hab = float(a["habitual"][hora]) if a["hay_base"] else None
+    veces = veces_en_palabras(casos / hab if hab else None)
+    hab_txt = (f"{hab:.0f} en un día normal a esa hora" if hab is not None
+               else "sin referencia")
+    rango = f"{hora:02d}:00 a {hora:02d}:59"
+    fecha = analisis.fecha_larga(dia)
+    print(f"Cierre de {dia} {hora:02d}:00 -> {casos} casos ({veces})")
+
+    asunto_txt = (f"📊 Cierre del pico · {hora:02d}:00 · {casos} autodiagnósticos "
+                  f"en la hora")
+    url = _texto("ALERTA_URL_APP")
+    lineas = [
+        f"📊 *Cierre de la hora · {rango}* · {fecha}",
+        "",
+        f"La hora terminó con *{casos} autodiagnósticos* — {veces} ({hab_txt}).",
+        "",
+        "El pico se avisó cuando ocurrió; este es el total final de esa hora.",
+    ]
+    if url:
+        lineas += ["", f"<{url}|Ver el detalle en el termómetro>"]
+    chat = "\n".join(lineas)
+    texto = (f"CIERRE DE LA HORA {rango} ({fecha}, hora de Colombia)\n\n"
+             f"La hora termino con {casos} autodiagnosticos: {veces} ({hab_txt}).\n"
+             "El pico se aviso cuando ocurrio; este es el total final de esa hora.\n"
+             + (f"\nDetalle: {url}\n" if url else ""))
+    boton = (f'<p style="margin:20px 0 0"><a href="{url}" style="background:#1a73e8;'
+             'color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;'
+             'font-weight:600">Ver el detalle en el termómetro</a></p>') if url else ""
+    html = (
+        '<!doctype html><html lang="es"><head><meta charset="utf-8"></head>'
+        '<body style="margin:0;padding:24px 12px;background:#f1f3f4;'
+        "font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif\">"
+        '<div style="max-width:560px;margin:0 auto;background:#fff;'
+        'border-radius:12px;padding:24px">'
+        f'<div style="font-size:13px;color:#5f6368">Cierre de la hora · {rango} · {fecha}</div>'
+        f'<div style="font-size:36px;font-weight:700;color:#202124;margin-top:8px">{casos}</div>'
+        f'<div style="font-size:14px;color:#3c4043">autodiagnósticos en la hora — <b>{veces}</b> '
+        f'<span style="color:#80868b">({hab_txt})</span></div>'
+        '<p style="font-size:13px;color:#5f6368;margin:16px 0 0">El pico se avisó cuando '
+        'ocurrió; este es el total final de esa hora.</p>'
+        f'{boton}</div></body></html>')
+
+    if args.prueba:
+        print("  (modo prueba: no se envía)\n" + chat)
+        return True
+    entregado = False
+    if hay_chat():
+        try:
+            enviar_chat(chat)
+            entregado = True
+            print("  Cierre publicado en Google Chat.")
+        except Exception as e:
+            print(f"  ERROR publicando el cierre en Chat: {type(e).__name__}: {e}")
+    if puede_enviar() and destinos:
+        try:
+            enviar(asunto_txt, html, texto, destinos)
+            entregado = True
+            print(f"  Cierre enviado por correo a {len(destinos)} personas.")
+        except Exception as e:
+            print(f"  ERROR enviando el cierre por correo: {type(e).__name__}: {e}")
+    return entregado
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         description="Avisa por correo si los autodiagnósticos se disparan en una hora.")
@@ -1055,6 +1155,8 @@ def main(argv=None) -> int:
 
     estado = {} if args.ignorar_estado else estado_leer()
     avisadas = avisadas_de(estado)
+    cerradas = cerradas_de(estado)
+    guardar = not forzado and not args.prueba
 
     if forzado:
         dia = (dt.date.fromisoformat(args.dia) if args.dia else serie.max().date())
@@ -1077,6 +1179,12 @@ def main(argv=None) -> int:
     if avisadas:
         print(f"Ya avisadas antes: {len(avisadas)} horas en memoria")
 
+    if not forzado:
+        for momento in horas_por_cerrar(avisadas, cerradas):
+            print()
+            if avisar_cierre(serie, momento, destinos, args):
+                cerradas.add(clave_hora(momento))
+
     if not completo:
         # El paso rápido solo trae fechas: alcanza para saber si hay pico, no
         # para explicarlo. El detalle (causa, ciudad, canal) se pide únicamente
@@ -1085,7 +1193,9 @@ def main(argv=None) -> int:
                       if (args.ignorar_estado or clave_hora(m) not in avisadas)
                       and hay_pico(serie, m)]
         if not pendientes:
-            print("\nNinguna hora de la ventana es pico. No hay nada que avisar.")
+            print("\nNingún pico nuevo en la ventana. No hay nada que avisar.")
+            if guardar:
+                estado_guardar(avisadas, cerradas)
             return 0
         print("\nPico en: " + ", ".join(m.strftime("%d/%m %H:00") for m in pendientes)
               + ". Trayendo el detalle para explicarlo…")
@@ -1103,8 +1213,8 @@ def main(argv=None) -> int:
             # la hora sigue dentro de la ventana que se repasa completa.
             hubo_fallo = True
 
-    if not forzado and not args.prueba:
-        estado_guardar(avisadas)
+    if guardar:
+        estado_guardar(avisadas, cerradas)
 
     return 1 if hubo_fallo else 0
 
@@ -1195,7 +1305,10 @@ def revisar_hora(df: pd.DataFrame, momento: pd.Timestamp,
             # queda dicho en el registro.
             print(f"\nAVISO: el pico se avisó por {', '.join(entregaron)}, pero "
                   f"{', '.join(fallaron)} falló. Conviene revisar ese canal.")
-        return 0
+        # "avisado" y no 0: con 0 la hora nunca quedaba marcada, y con el
+        # disparador cada 2 minutos el mismo pico se avisaba en cada corrida
+        # (5-nov-2026: decenas de mensajes repetidos en Chat y correo).
+        return "avisado"
 
     # Ningún canal entregó: se grita con todas las letras, porque la corrida
     # falla y GitHub le escribe al dueño del repositorio. Quien lea ese aviso
