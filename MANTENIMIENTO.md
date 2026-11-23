@@ -96,3 +96,4 @@ Agrega una línea cada vez. La más reciente arriba.
 |---|---|---|
 | 2026-11-04 | Alejandro | La alerta pasa a leer en vivo y a dispararse cada 2 min desde cron-job.org. Token vence el 4 de noviembre de 2027. |
 | 2026-10-13 | Alejandro | Alerta puesta en marcha y verificada desde Actions. |
+| 2026-11-23 | Alejandro | Alerta puesta en marcha y verificada desde Actions. |
